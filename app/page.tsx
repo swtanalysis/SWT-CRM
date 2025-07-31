@@ -10,7 +10,7 @@ import {
   Select, MenuItem, FormControl, InputLabel, Stack, Link,
   Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar
 } from '@mui/material'
-import Grid from '@mui/material/Grid';
+import { Grid } from '@mui/material';
 import {
   Dashboard as DashboardIcon, People as PeopleIcon, Flight as FlightIcon, VpnKey as VpnKeyIcon,
   CreditCard as CreditCardIcon, Policy as PolicyIcon, Delete as DeleteIcon, Add as AddIcon,
@@ -711,25 +711,25 @@ export default function DashboardPage() {
             <Grid item xs={12}>
                 <Grid container spacing={3}>
                     <Grid item xs={12} sm={6} md={3}>
-                        <Paper sx={{p:3, textAlign:'center', elevation: 3, borderRadius: 2, height: '100%'}}>
+                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
                             <Typography variant="h6" color="text.secondary" gutterBottom>Total Clients</Typography>
                             <Typography variant="h4" color="primary.main" sx={{fontWeight: 'bold'}}>{stats.clients}</Typography>
                         </Paper>
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
-                        <Paper sx={{p:3, textAlign:'center', elevation: 3, borderRadius: 2, height: '100%'}}>
+                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
                             <Typography variant="h6" color="text.secondary" gutterBottom>Active Bookings</Typography>
                             <Typography variant="h4" color="secondary.main" sx={{fontWeight: 'bold'}}>{stats.bookings}</Typography>
                         </Paper>
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
-                        <Paper sx={{p:3, textAlign:'center', elevation: 3, borderRadius: 2, height: '100%'}}>
+                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
                             <Typography variant="h6" color="text.secondary" gutterBottom>Avg. Trip Duration</Typography>
                             <Typography variant="h4" color="info.main" sx={{fontWeight: 'bold'}}>{avgTripDuration} Days</Typography>
                         </Paper>
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
-                        <Paper sx={{p:3, textAlign:'center', elevation: 3, borderRadius: 2, height: '100%'}}>
+                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
                             <Typography variant="h6" color="text.secondary" gutterBottom>Expiring Soon</Typography>
                             <Typography variant="h4" color="error.main" sx={{fontWeight: 'bold'}}>{expiringRemindersCount}</Typography>
                         </Paper>
@@ -740,7 +740,7 @@ export default function DashboardPage() {
             {/* Charts Section */}
             
             <Grid item xs={12}>
-                <Paper sx={{ p: 3, elevation: 3, borderRadius: 2 }}>
+                <Paper elevation={3} sx={{ p: 3, borderRadius: 2 }}>
                     <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Cross-Sell Opportunities</Typography>
                     <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
                         <Tabs value={opportunityTab} onChange={handleTabChange} aria-label="opportunity tabs">
@@ -784,7 +784,7 @@ export default function DashboardPage() {
             <Grid item xs={12}>
                 <Grid container spacing={3}>
                     <Grid item xs={12} md={6}>
-                        <Paper sx={{p:3, height: 400, elevation: 3, borderRadius: 2, display: 'flex', flexDirection: 'column'}}>
+                        <Paper elevation={3} sx={{p:3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column'}}>
                             <Typography variant="h6" gutterBottom sx={{fontWeight: 'bold', flexShrink: 0}}>Bookings Over Time</Typography>
                             <Box sx={{flexGrow: 1, width: '100%'}}>
                                 <ResponsiveContainer width="100%" height="100%"><LineChart data={bookingsByMonthData} margin={{top: 5, right: 30, left: 20, bottom: 5}}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis allowDecimals={false} /><RechartsTooltip /><Legend /><Line type="monotone" dataKey="bookings" stroke="#8884d8" activeDot={{ r: 8 }} strokeWidth={2} /></LineChart></ResponsiveContainer>
@@ -792,7 +792,7 @@ export default function DashboardPage() {
                         </Paper>
                     </Grid>
                     <Grid item xs={12} md={6}>
-                        <Paper sx={{ p: 3, height: 400, elevation: 3, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                        <Paper elevation={3} sx={{ p: 3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
                             <Typography variant="h6" gutterBottom sx={{fontWeight: 'bold', flexShrink: 0}}>Client Nationality Distribution</Typography>
                             <Box sx={{flexGrow: 1, width: '100%'}}>
                                 <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={nationalityData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, percent }) => `${name} ${percent ? (percent * 100).toFixed(0) : ''}%`} labelLine={false}>{nationalityData.map((e, i) => <Cell key={`cell-${i}`} fill={COLORS[i % COLORS.length]} />)}</Pie><RechartsTooltip /><Legend wrapperStyle={{fontSize: '0.8rem'}} /></PieChart></ResponsiveContainer>
@@ -800,7 +800,7 @@ export default function DashboardPage() {
                         </Paper>
                     </Grid>
                     <Grid item xs={12} md={6}>
-                        <Paper sx={{p:3, height: 400, elevation: 3, borderRadius: 2, display: 'flex', flexDirection: 'column'}}>
+                        <Paper elevation={3} sx={{p:3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column'}}>
                             <Typography variant="h6" gutterBottom sx={{fontWeight: 'bold', flexShrink: 0}}>Popular Destinations</Typography>
                             <Box sx={{flexGrow: 1, width: '100%'}}>
                                 <ResponsiveContainer width="100%" height="100%">
@@ -817,7 +817,7 @@ export default function DashboardPage() {
                         </Paper>
                     </Grid>
                     <Grid item xs={12} md={6}>
-                        <Paper sx={{ p: 3, height: 400, elevation: 3, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                        <Paper elevation={3} sx={{ p: 3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
                             <Typography variant="h6" gutterBottom sx={{fontWeight: 'bold', flexShrink: 0}}>Booking Status</Typography>
                             <Box sx={{flexGrow: 1, width: '100%'}}>
                                 <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={bookingStatusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} fill="#FF8042" label={({ name, percent }) => `${name} ${percent ? (percent * 100).toFixed(0) : ''}%`} labelLine={false}>{bookingStatusData.map((e, i) => <Cell key={`cell-${i}`} fill={COLORS.slice(2)[i % COLORS.slice(2).length]} />)}</Pie><RechartsTooltip /><Legend wrapperStyle={{fontSize: '0.8rem'}} /></PieChart></ResponsiveContainer>
@@ -825,7 +825,7 @@ export default function DashboardPage() {
                         </Paper>
                     </Grid>
                     <Grid item xs={12} md={6}>
-                        <Paper sx={{p:3, height: 400, elevation: 3, borderRadius: 2, display: 'flex', flexDirection: 'column'}}>
+                        <Paper elevation={3} sx={{p:3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column'}}>
                             <Typography variant="h6" gutterBottom sx={{fontWeight: 'bold', flexShrink: 0}}>Top 5 Clients (by Revenue)</Typography>
                             <Box sx={{flexGrow: 1, width: '100%'}}>
                                 <ResponsiveContainer width="100%" height="100%">
@@ -842,7 +842,7 @@ export default function DashboardPage() {
                         </Paper>
                     </Grid>
                     <Grid item xs={12} md={6}>
-                        <Paper sx={{ p: 3, height: 400, elevation: 3, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                        <Paper elevation={3} sx={{ p: 3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
                             <Typography variant="h6" gutterBottom sx={{fontWeight: 'bold', flexShrink: 0}}>Vendor Performance (by Revenue)</Typography>
                             <Box sx={{flexGrow: 1, width: '100%'}}>
                                 <ResponsiveContainer width="100%" height="100%">
@@ -892,18 +892,28 @@ export default function DashboardPage() {
         setFormData(modalMode === 'edit' && selectedItem ? selectedItem : getFieldsForView(activeView));
     }, [openModal, modalMode, selectedItem, activeView]);
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | { name?: string; value: unknown }>) => {
-        const { name, value } = e.target as HTMLInputElement;
-        // Special handling for vip_status checkbox
-        if (name === 'vip_status') {
-            setFormData({ ...formData, [name]: e.target.checked });
+    const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        const type = 'type' in e.target ? e.target.type : 'text';
+        
+        if (type === 'checkbox') {
+            // Type assertion to access 'checked' property
+            setFormData({ ...formData, [name]: (e.target as HTMLInputElement).checked });
         } else {
-            setFormData({ ...formData, [name]: (e.target as HTMLInputElement).type === 'number' ? parseFloat(value) || 0 : value });
+            setFormData({ ...formData, [name]: value });
         }
     };
 
-    const handleDateChange = (key: string, date: dayjs.Dayjs | null) => {
-        setFormData({ ...formData, [key]: date ? date.format('YYYY-MM-DD') : null });
+    const handleDateChange = (name: string, date: dayjs.Dayjs | null) => {
+        setFormData({ ...formData, [name]: date ? date.format('YYYY-MM-DD') : null });
+    };
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const { files } = e.target;
+        if (files && files.length > 0) {
+            const file = files[0];
+            setFormData({ ...formData, file_name: file.name, file_path: URL.createObjectURL(file) });
+        }
     };
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -930,7 +940,7 @@ export default function DashboardPage() {
                                             name="client_id"
                                             value={formData[key] || ''}
                                             label="Client"
-                                            onChange={(e) => handleChange(e as any)}
+                                            onChange={(e) => handleFormChange(e as any)}
                                         >
                                             <MenuItem value=""><em>None</em></MenuItem>
                                             {clients.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
@@ -945,7 +955,7 @@ export default function DashboardPage() {
                                             name="booking_id"
                                             value={formData[key] || ''}
                                             label="Booking"
-                                            onChange={(e) => handleChange(e as any)}
+                                            onChange={(e) => handleFormChange(e as any)}
                                         >
                                             <MenuItem value=""><em>None</em></MenuItem>
                                             {bookings.map(b => <MenuItem key={b.id} value={b.id}>{b.pnr || b.reference} ({clients.find(c => c.id === b.client_id)?.first_name || 'N/A'})</MenuItem>)}
@@ -967,7 +977,7 @@ export default function DashboardPage() {
                                             name="status"
                                             value={formData[key] || ''}
                                             label="Status"
-                                            onChange={(e) => handleChange(e as any)}
+                                            onChange={(e) => handleFormChange(e as any)}
                                         >
                                             <MenuItem value="Confirmed">Confirmed</MenuItem>
                                             <MenuItem value="Pending">Pending</MenuItem>
@@ -981,14 +991,14 @@ export default function DashboardPage() {
                                                 type="checkbox"
                                                 name="vip_status"
                                                 checked={!!formData[key]} // Ensure it's a boolean
-                                                onChange={handleChange}
+                                                onChange={handleFormChange}
                                             /> VIP Status
                                         </label>
                                     </FormControl>
                                 ) : (
                                     <TextField name={key} label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                                         type={typeof (getFieldsForView(activeView) as any)[key] === 'number' ? 'number' : 'text'}
-                                        fullWidth value={formData[key] || ''} onChange={handleChange} required={key !== 'notes' && key !== 'special_requirement' && key !== 'vip_status' && key !== 'amount' && key !== 'departure_date' && key !== 'status'}
+                                        fullWidth value={formData[key] || ''} onChange={handleFormChange} required={key !== 'notes' && key !== 'special_requirement' && key !== 'vip_status' && key !== 'amount' && key !== 'departure_date' && key !== 'status'}
                                         multiline={key.includes('notes') || key.includes('special_requirement')}
                                         rows={key.includes('notes') || key.includes('special_requirement') ? 3 : 1}
                                     />
@@ -1062,7 +1072,17 @@ export default function DashboardPage() {
         setUploading(false);
     };
 
-    const handleDeleteDoc = async (doc: ClientDocument) => {
+    const handleDownloadDoc = (doc: ClientDocument) => {
+        if (!doc.file_path) return;
+        const { data } = supabase.storage.from('client-documents').getPublicUrl(doc.file_path);
+        if (data.publicUrl) {
+            window.open(data.publicUrl, '_blank');
+        } else {
+            onShowSnackbar('Error getting download link.', 'error');
+        }
+    };
+
+    const handleDeleteDoc = async (docId: string) => {
         if (!window.confirm(`Are you sure you want to delete "${doc.file_name}"?`)) return;
 
         setDocError(null);
@@ -1328,20 +1348,46 @@ const ClientDocumentsView = ({ client, onUpdate, onShowSnackbar }: { client: Cli
         setUploading(false);
     };
 
-    const handleDeleteDoc = async (doc: ClientDocument) => {
+    const handleDownloadDoc = (doc: ClientDocument) => {
+        if (!doc.file_path) return;
+        const { data } = supabase.storage.from('client-documents').getPublicUrl(doc.file_path);
+        if (data.publicUrl) {
+            window.open(data.publicUrl, '_blank');
+        } else {
+            onShowSnackbar('Error getting download link.', 'error');
+        }
+    };
+
+    const handleDeleteDoc = async (docId: string) => {
         if (!window.confirm(`Are you sure you want to delete "${doc.file_name}"?`)) return;
+
+        setDocError(null);
         const { error: storageError } = await supabase.storage.from('client-documents').remove([doc.file_path]);
-        if (storageError) { onShowSnackbar({ open: true, message: `Storage Error: ${storageError.message}` }); return; }
+        if (storageError) {
+            setDocError(`Failed to delete file from storage: ${storageError.message}`);
+            return;
+        }
         const { error: dbError } = await supabase.from('client_documents').delete().eq('id', doc.id);
-        if (dbError) { onShowSnackbar({ open: true, message: `DB Error: ${dbError.message}` }); }
-        else { onShowSnackbar({ open: true, message: 'Document deleted!' }); fetchDocuments(); }
+        if (dbError) setDocError(`Failed to delete document record: ${dbError.message}`);
+        else fetchDocuments();
     }
 
-    const handleViewOrDownload = async (doc: ClientDocument) => {
-        const { data, error } = supabase.storage.from('client-documents').getPublicUrl(doc.file_path);
-        if (error) onShowSnackbar({ open: true, message: `Error getting URL: ${error.message}` });
-        else window.open(data.publicUrl, '_blank');
-    };
+  const handleViewOrDownload = async (doc: ClientDocument) => {
+    setDocError(null);
+    try {
+        // Use createSignedUrl for private buckets. This creates a temporary, secure URL.
+        const { data, error } = await supabase.storage.from('client-documents').createSignedUrl(doc.file_path, 60); // URL is valid for 60 seconds
+        
+        if (error) {
+            setDocError(`Failed to get document URL: ${error.message}`);
+            return;
+        } else {  
+            window.open(data.signedUrl, '_blank');
+        }
+    } catch (err: any) {
+        setDocError(`An unexpected error occurred: ${err.message}`);
+    }
+};
 
     if (loading) return <CircularProgress />;
 
@@ -1358,7 +1404,7 @@ const ClientDocumentsView = ({ client, onUpdate, onShowSnackbar }: { client: Cli
                 {documents.length > 0 ? documents.map(doc => (
                     <ListItem key={doc.id} divider secondaryAction={
                         <>
-                            <Tooltip title="View/Download"><IconButton onClick={() => handleViewOrDownload(doc)}><VisibilityIcon color="primary" /></IconButton></Tooltip>
+                            <Tooltip title="View/Download"><IconButton onClick={() => handleDownloadDoc(doc)}><VisibilityIcon color="primary" /></IconButton></Tooltip>
                             <Tooltip title="Delete"><IconButton onClick={() => handleDeleteDoc(doc)}><DeleteIcon color="error" /></IconButton></Tooltip>
                         </>
                     }>
@@ -1374,7 +1420,7 @@ const ClientDocumentsView = ({ client, onUpdate, onShowSnackbar }: { client: Cli
 // --- CLIENT INSIGHT VIEW ---
 const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, allPolicies, allNotes, globalReminders, onUpdate, onShowSnackbar, onOpenModal, onDeleteItem }: {
     allClients: Client[], allBookings: Booking[], allVisas: Visa[], allPassports: Passport[], allPolicies: Policy[], allNotes: ClientNote[], globalReminders: Reminder[],
-    onUpdate: () => void, onShowSnackbar: (state: {open: boolean, message: string}) => void,
+    onUpdate: () => void, onShowSnackbar: (state: { open: boolean, message: string}) => void,
     onOpenModal: (mode: 'add' | 'edit', item: unknown, overrideView?: string) => void,
     onDeleteItem: (id: string, view: string) => void
 }) => {
@@ -1484,8 +1530,6 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
         }
     };
 
-    // Removed handleShareLink as requested
-
     const analytics = useMemo(() => {
         if (!selectedClient) return { totalSpend: 0, numTrips: 0, avgSpend: 0, destinations: [] };
         const bookings = clientData.bookings;
@@ -1497,9 +1541,16 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
             if(b.destination) acc[b.destination] = (acc[b.destination] || 0) + 1;
             return acc;
         }, {} as Record<string, number>);
-        const destinations = Object.entries(destinationCounts).map(([name, value]) => ({name, 'Trips': value}));
-        
-        return { totalSpend, numTrips, avgSpend, destinations };
+        const popularDestination = Object.keys(destinationCounts).length > 0 
+            ? Object.keys(destinationCounts).reduce((a, b) => destinationCounts[a] > destinationCounts[b] ? a : b)
+            : 'N/A';
+
+        return {
+            totalSpend,
+            numTrips,
+            avgSpend,
+            popularDestination,
+        };
     }, [selectedClient, clientData]);
     
     const getReminderIcon = (type: string) => ({ Birthday: <CakeIcon color="secondary" />, Passport: <CreditCardIcon color="error" />, Visa: <VpnKeyIcon color="error" />, Policy: <PolicyIcon color="error" />, Booking: <FlightIcon color="info" /> }[type] || <NotificationsIcon />);
@@ -1537,7 +1588,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                         <Grid container spacing={3}>
                             {/* Client Summary Card */}
                             <Grid item xs={12}>
-                                <Paper sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 3, borderRadius: 2 }}>
+                                <Paper elevation={3} sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 3, borderRadius: 2 }}>
                                     <Avatar sx={{ width: 90, height: 90, bgcolor: 'primary.main', fontSize: '2.5rem' }}>{selectedClient.first_name[0]}</Avatar>
                                     <Box flexGrow={1}>
                                         <Typography variant="h4" component="div" sx={{fontWeight: 'bold', mb: 0.5}}>
@@ -1567,7 +1618,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                             
                             {/* Analytics Section */}
                             <Grid item xs={12} md={6}>
-                                <Paper sx={{ p: 3, height: '100%', borderRadius: 2 }}>
+                                <Paper elevation={3} sx={{ p: 3, height: '100%', borderRadius: 2 }}>
                                     <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Client Analytics</Typography>
                                     <Stack spacing={2} sx={{ mt: 2 }}>
                                         <Box display="flex" justifyContent="space-between" alignItems="center">
@@ -1599,7 +1650,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
 
                             {/* Reminders Section */}
                             <Grid item xs={12} md={6}>
-                                <Paper sx={{ p: 3, height: '100%', borderRadius: 2 }}>
+                                <Paper elevation={3} sx={{ p: 3, height: '100%', borderRadius: 2 }}>
                                     <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Client Reminders</Typography>
                                     <List>
                                         {clientData.reminders.length > 0 ? (
@@ -1639,7 +1690,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
 
                             {/* Main Details Tabs */}
                             <Grid item xs={12}>
-                                <Paper sx={{ mt: 0, p: 2, borderRadius: 2 }}>
+                                <Paper elevation={3} sx={{ mt: 0, p: 2, borderRadius: 2 }}>
                                     <Tabs value={tabValue} onChange={(e, val) => setTabValue(val)} indicatorColor="primary" textColor="primary" variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile sx={{borderBottom: 1, borderColor: 'divider'}}>
                                         <Tab label={`Bookings (${clientData.bookings.length})`} />
                                         <Tab label={`Visas (${clientData.visas.length})`} />
