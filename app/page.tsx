@@ -624,14 +624,34 @@ export default function DashboardPage() {
         const clientsWithPolicies = new Set(policyData.map(p => p.client_id));
         const clientsWithVisas = new Set(visaData.map(v => v.client_id));
         const clientsWithPassports = new Set(passportData.map(p => p.client_id));
+        const today = dayjs();
 
-        const opportunities = {
+        const opportunities: Record<string, string[]> = {
             'Needs Insurance Policy': [...clientsWithBookings].filter(id => !clientsWithPolicies.has(id)),
             'May Need Visa': [...clientsWithBookings].filter(id => !clientsWithVisas.has(id)),
-            'Needs Passport on File': [...clientsWithBookings].filter(id => !clientsWithPassports.has(id)),
+            'Needs Passport on File': [...allClientIds].filter(id => !clientsWithPassports.has(id)),
             'Needs First Booking': [...allClientIds].filter(id => !clientsWithBookings.has(id)),
         };
+
+        // Potential Re-engagement: Clients who haven't booked in the last year
+        const oneYearAgo = today.subtract(1, 'year');
+        const recentBookers = new Set(bookingData.filter(b => dayjs(b.created_at).isAfter(oneYearAgo)).map(b => b.client_id));
+        opportunities['Potential Re-engagement'] = [...clientsWithBookings].filter(id => !recentBookers.has(id));
+
+        // VIP Clients with no recent activity (last 6 months)
+        const sixMonthsAgo = today.subtract(6, 'months');
+        const vipClientIds = new Set(clientData.filter(c => c.vip_status).map(c => c.id));
+        const recentVipBookers = new Set(bookingData.filter(b => dayjs(b.created_at).isAfter(sixMonthsAgo) && vipClientIds.has(b.client_id)).map(b => b.client_id));
+        opportunities['Inactive VIPs'] = [...vipClientIds].filter(id => !recentVipBookers.has(id));
         
+        // Clients with expiring passports (next 6 months)
+        const sixMonthsFromNow = today.add(6, 'months');
+        const expiringPassportClientIds = new Set(passportData.filter(p => {
+            const expiry = dayjs(p.expiry_date);
+            return expiry.isAfter(today) && expiry.isBefore(sixMonthsFromNow);
+        }).map(p => p.client_id));
+        opportunities['Passport Renewal Opportunity'] = [...expiringPassportClientIds];
+
         return Object.entries(opportunities).map(([type, clientIds]) => ({
             type,
             clients: clientIds.map(id => clientData.find(c => c.id === id)).filter((c): c is Client => Boolean(c)).slice(0, 10)
@@ -1028,7 +1048,7 @@ export default function DashboardPage() {
     </Dialog>
   );
 
-  const DocumentUploadModal = () => {
+  const DocumentUploadModal = ({ onShowSnackbar }: { onShowSnackbar: (state: {open: boolean, message: string}) => void }) => {
     const [documents, setDocuments] = useState<ClientDocument[]>([]);
     const [uploading, setUploading] = useState(false);
     const [docError, setDocError] = useState<string | null>(null);
@@ -1078,12 +1098,15 @@ export default function DashboardPage() {
         if (data.publicUrl) {
             window.open(data.publicUrl, '_blank');
         } else {
-            onShowSnackbar('Error getting download link.', 'error');
+            onShowSnackbar({ open: true, message: 'Error getting download link.' });
         }
     };
 
     const handleDeleteDoc = async (docId: string) => {
-        if (!window.confirm(`Are you sure you want to delete "${doc.file_name}"?`)) return;
+        const doc = documents.find(d => d.id === docId);
+        const fileName = doc?.file_name || '';
+        if (!doc) return;
+        if (!window.confirm(`Are you sure you want to delete "${fileName}"?`)) return;
 
         setDocError(null);
         const { error: storageError } = await supabase.storage.from('client-documents').remove([doc.file_path]);
@@ -1136,7 +1159,7 @@ export default function DashboardPage() {
                                         </IconButton>
                                     </Tooltip>
                                     <Tooltip title="Delete">
-                                        <IconButton edge="end" aria-label="delete" onClick={() => handleDeleteDoc(doc)}>
+                                        <IconButton edge="end" aria-label="delete" onClick={() => handleDeleteDoc(doc.id)}>
                                             <DeleteIcon color="error" />
                                         </IconButton>
                                     </Tooltip>
@@ -1270,7 +1293,7 @@ export default function DashboardPage() {
       <RightDrawer reminders={reminders} onReminderClick={handleReminderClick} />
 
       {openModal && <FormModal />}
-      {docModalOpen && <DocumentUploadModal />}
+      {docModalOpen && <DocumentUploadModal onShowSnackbar={setSnackbar} />}
       <ConfirmationDialog />
       <Snackbar
         open={snackbar.open}
@@ -1354,38 +1377,41 @@ const ClientDocumentsView = ({ client, onUpdate, onShowSnackbar }: { client: Cli
         if (data.publicUrl) {
             window.open(data.publicUrl, '_blank');
         } else {
-            onShowSnackbar('Error getting download link.', 'error');
+            onShowSnackbar({ open: true, message: 'Error getting download link.' });
         }
     };
 
     const handleDeleteDoc = async (docId: string) => {
+        const doc = documents.find(d => d.id === docId);
+        if (!doc) return;
         if (!window.confirm(`Are you sure you want to delete "${doc.file_name}"?`)) return;
 
-        setDocError(null);
         const { error: storageError } = await supabase.storage.from('client-documents').remove([doc.file_path]);
         if (storageError) {
-            setDocError(`Failed to delete file from storage: ${storageError.message}`);
+            onShowSnackbar({ open: true, message: `Failed to delete file from storage: ${storageError.message}` });
             return;
         }
         const { error: dbError } = await supabase.from('client_documents').delete().eq('id', doc.id);
-        if (dbError) setDocError(`Failed to delete document record: ${dbError.message}`);
-        else fetchDocuments();
+        if (dbError) onShowSnackbar({ open: true, message: `Failed to delete document record: ${dbError.message}` });
+        else {
+            onShowSnackbar({ open: true, message: 'Document deleted successfully!' });
+            fetchDocuments();
+        }
     }
 
   const handleViewOrDownload = async (doc: ClientDocument) => {
-    setDocError(null);
     try {
         // Use createSignedUrl for private buckets. This creates a temporary, secure URL.
         const { data, error } = await supabase.storage.from('client-documents').createSignedUrl(doc.file_path, 60); // URL is valid for 60 seconds
         
         if (error) {
-            setDocError(`Failed to get document URL: ${error.message}`);
+            onShowSnackbar({ open: true, message: `Failed to get document URL: ${error.message}` });
             return;
         } else {  
             window.open(data.signedUrl, '_blank');
         }
     } catch (err: any) {
-        setDocError(`An unexpected error occurred: ${err.message}`);
+        onShowSnackbar({ open: true, message: `An unexpected error occurred: ${err.message}` });
     }
 };
 
@@ -1405,7 +1431,7 @@ const ClientDocumentsView = ({ client, onUpdate, onShowSnackbar }: { client: Cli
                     <ListItem key={doc.id} divider secondaryAction={
                         <>
                             <Tooltip title="View/Download"><IconButton onClick={() => handleDownloadDoc(doc)}><VisibilityIcon color="primary" /></IconButton></Tooltip>
-                            <Tooltip title="Delete"><IconButton onClick={() => handleDeleteDoc(doc)}><DeleteIcon color="error" /></IconButton></Tooltip>
+                            <Tooltip title="Delete"><IconButton onClick={() => handleDeleteDoc(doc.id)}><DeleteIcon color="error" /></IconButton></Tooltip>
                         </>
                     }>
                         <ListItemIcon><DescriptionIcon /></ListItemIcon>
@@ -1534,10 +1560,10 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
         if (!selectedClient) return { totalSpend: 0, numTrips: 0, avgSpend: 0, destinations: [] };
         const bookings = clientData.bookings;
         const policies = clientData.policies;
-        const totalSpend = bookings.reduce((sum, b) => sum + (b.amount || 0), 0) + policies.reduce((sum, p) => sum + (p.premium_amount || 0), 0);
+        const totalSpend = bookings.reduce((sum: any, b: { amount: any; }) => sum + (b.amount || 0), 0) + policies.reduce((sum: any, p: { premium_amount: any; }) => sum + (p.premium_amount || 0), 0);
         const numTrips = bookings.length;
         const avgSpend = numTrips > 0 ? totalSpend / numTrips : 0;
-        const destinationCounts = bookings.reduce((acc, b) => {
+        const destinationCounts = bookings.reduce((acc: { [x: string]: any; }, b: { destination: string | number; }) => {
             if(b.destination) acc[b.destination] = (acc[b.destination] || 0) + 1;
             return acc;
         }, {} as Record<string, number>);
@@ -1800,3 +1826,13 @@ const NoteEditModal: React.FC<NoteEditModalProps> = ({ open, onClose, note, onSa
         </Dialog>
     );
 };
+
+
+// function onShowSnackbar(arg0: string, arg1: string) {
+//     throw new Error('Function not implemented.');
+// }
+// function setDocError(arg0: string | null) {
+//     throw new Error('Function not implemented.');
+// }
+// }
+
