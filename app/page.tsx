@@ -81,7 +81,7 @@ const AuthComponent = ({ setSession }: { setSession: (session: Session | null) =
         <Container component="main" maxWidth="xs">
             <CssBaseline />
             <Box sx={{ marginTop: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <img src="/SWT logo TD.png" alt="SWT Logo" style={{ width: '150px', marginBottom: '1rem' }} />
+                <img src="/SWT-Logo-TD.png" alt="SWT Logo" style={{ width: '150px', marginBottom: '1rem' }} />
                 <Typography component="h1" variant="h5">
                     Shajanand World Travels CRM
                 </Typography>
