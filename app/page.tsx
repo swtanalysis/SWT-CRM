@@ -450,7 +450,7 @@ export default function DashboardPage() {
   // --- UI CONFIGURATION & FILTERING ---
   const getFieldsForView = (view: string) => {
     switch (view) {
-        case 'Clients': return { first_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: '', vip_status: false };
+        case 'Clients': return { first_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
         case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', departure_date: '', amount: 0, status: 'Confirmed' };
         case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', notes: '' };
         case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: ''};
