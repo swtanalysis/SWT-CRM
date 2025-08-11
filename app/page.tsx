@@ -873,7 +873,7 @@ export default function DashboardPage() {
                         </Paper>
                     </Grid>
                     <Grid item xs={12} md={6}>
-                        <Paper elevation={3} sx={{p:3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column'}}>
+                        <Paper elevation={3} sx={{p:3, height: 400, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
                             <Typography variant="h6" gutterBottom sx={{fontWeight: 'bold', flexShrink: 0}}>Top 5 Clients (by Revenue)</Typography>
                             <Box sx={{flexGrow: 1, width: '100%'}}>
                                 <ResponsiveContainer width="100%" height="100%">
@@ -1549,23 +1549,27 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     const [clientData, setClientData] = useState<any>({ bookings: [], visas: [], passports: [], policies: [], notes: [], reminders: [] });
     const [tabValue, setTabValue] = useState(0);
     const [newNote, setNewNote] = useState('');
+    const [searchResults, setSearchResults] = useState<Client[]>([]);
 
     const [isNoteEditModalOpen, setIsNoteEditModalOpen] = useState(false);
     const [noteToEdit, setNoteToEdit] = useState<ClientNote | null>(null);
 
     const handleSearch = () => {
-        if (!insightSearchTerm) {
+        const term = insightSearchTerm.trim().toLowerCase();
+        if (!term) {
             setSelectedClient(null);
+            setSearchResults([]);
             return;
         }
-        const lowercasedTerm = insightSearchTerm.toLowerCase();
-        const foundClient = allClients.find(c =>
-            c.first_name.toLowerCase().includes(lowercasedTerm) ||
-            c.last_name.toLowerCase().includes(lowercasedTerm) ||
-            c.email_id.toLowerCase().includes(lowercasedTerm) ||
-            c.mobile_no.includes(lowercasedTerm)
+        const results = allClients.filter(c =>
+            (c.first_name || '').toLowerCase().includes(term) ||
+            (c.last_name || '').toLowerCase().includes(term) ||
+            (c.email_id || '').toLowerCase().includes(term) ||
+            (c.mobile_no || '').toLowerCase().includes(term) ||
+            (c.nationality || '').toLowerCase().includes(term)
         );
-        setSelectedClient(foundClient || null);
+        setSearchResults(results);
+        setSelectedClient(results.length === 1 ? results[0] : null);
     };
 
     useEffect(() => {
@@ -1696,7 +1700,23 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                     <Button variant="contained" onClick={handleSearch} startIcon={<SearchIcon />} sx={{height: '56px'}}>Search</Button>
                 </Paper>
 
-                {!selectedClient && (
+                {searchResults.length > 0 && (
+                    <Paper sx={{ p: 2, mb: 3, borderRadius: 2 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>{searchResults.length} result{searchResults.length > 1 ? 's' : ''}</Typography>
+                        <List sx={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #eee', borderRadius: 1 }}>
+                            {searchResults.map((c) => (
+                                <ListItem key={c.id} disablePadding divider selected={selectedClient?.id === c.id}>
+                                    <ListItemButton onClick={() => setSelectedClient(c)}>
+                                        <ListItemIcon><Avatar>{(c.first_name && c.first_name[0]) || '?'}</Avatar></ListItemIcon>
+                                        <ListItemText primary={`${c.first_name} ${c.last_name}`} secondary={`${c.email_id} • ${c.mobile_no}`} />
+                                    </ListItemButton>
+                                </ListItem>
+                            ))}
+                        </List>
+                    </Paper>
+                )}
+
+                {!selectedClient && searchResults.length === 0 && (
                     <Paper sx={{p: 4, textAlign: 'center', borderRadius: 2}}>
                         <AccountBoxIcon sx={{fontSize: 60, color: 'text.secondary', mb: 2}} />
                         <Typography variant="h6" color="text.secondary">Search for a client to see their insights.</Typography>
