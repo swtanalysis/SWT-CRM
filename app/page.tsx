@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react'
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { createClient, Session } from '@supabase/supabase-js'
 import {
   Box, CssBaseline, AppBar, Toolbar, Typography, Container, Paper, CircularProgress,
@@ -83,7 +83,7 @@ const AuthComponent = ({ setSession }: { setSession: (session: Session | null) =
             <Box sx={{ marginTop: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <img src="/SWT-Logo-TD.png" alt="SWT Logo" style={{ width: '150px', marginBottom: '1rem' }} />
                 <Typography component="h1" variant="h5">
-                    Shajanand World Travels CRM
+                    Sahajanand World Travels CRM
                 </Typography>
                 <Typography component="h2" variant="subtitle1" sx={{ mt: 2 }}>
                     Sign In
@@ -220,6 +220,9 @@ TableView.displayName = 'TableView';
 export default function DashboardPage() {
   // --- STATE MANAGEMENT ---
   const [session, setSession] = useState<Session | null>(null);
+  // Track last successful fetch to prevent unnecessary refetches on focus/visibility
+  const lastFetchRef = useRef<number>(0);
+  const sessionRef = useRef<Session | null>(null);
   const [clients, setClients] = useState<Client[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
   const [visas, setVisas] = useState<Visa[]>([])
@@ -257,16 +260,22 @@ export default function DashboardPage() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
+      sessionRef.current = session;
     })
 
-    const { data: { subscription } = {} } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
+    const { data: { subscription } = {} } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      // Only update session if it actually changed (avoid unnecessary rerenders/refetches)
+      const prev = sessionRef.current;
+      const prevUserId = prev?.user?.id;
+      const nextUserId = nextSession?.user?.id;
+      if (prevUserId !== nextUserId) {
+        setSession(nextSession);
+        sessionRef.current = nextSession;
+      }
     })
 
     return () => {
-      if (subscription) {
-        subscription.unsubscribe()
-      }
+      if (subscription) subscription.unsubscribe()
     }
   }, [])
 
@@ -316,6 +325,7 @@ export default function DashboardPage() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
     } finally {
+      lastFetchRef.current = Date.now();
       setLoading(false)
     }
   }, [session])
@@ -323,6 +333,24 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // Refetch on focus/visibility only when data is stale and no modal is open
+  useEffect(() => {
+    const maybeRefetch = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (openModal) return; // don't refetch while editing/adding
+      const STALE_MS = 2 * 60 * 1000; // 2 minutes
+      if (Date.now() - (lastFetchRef.current || 0) > STALE_MS) {
+        fetchData();
+      }
+    };
+    window.addEventListener('focus', maybeRefetch);
+    document.addEventListener('visibilitychange', maybeRefetch);
+    return () => {
+      window.removeEventListener('focus', maybeRefetch);
+      document.removeEventListener('visibilitychange', maybeRefetch);
+    };
+  }, [fetchData, openModal]);
 
   // --- REMINDER GENERATION ---
   const reminders = useMemo<Reminder[]>(() => {
@@ -340,10 +368,10 @@ export default function DashboardPage() {
             allReminders.push({ type: 'Birthday', id: client.id, name: `${client.first_name} ${client.last_name}`, dob: client.dob, days_left: daysLeft, client_id: client.id });
         }
     });
-    
-    const checkExpiry = (items: (Passport | Visa | Policy)[], type: 'Passport' | 'Visa' | 'Policy', threshold: number) => {
-        items.forEach(item => {
-            const expiryDateField = 'expiry_date' in item ? item.expiry_date : 'end_date' in item ? item.end_date : null;
+
+    const checkExpiry = (items: (Passport[] | Visa[] | Policy[]), type: string, threshold: number) => {
+        items.forEach((item: any) => {
+            const expiryDateField = item.expiry_date || item.end_date;
             if (!expiryDateField) return;
 
             const expiryDate = dayjs(expiryDateField);
@@ -450,7 +478,7 @@ export default function DashboardPage() {
   // --- UI CONFIGURATION & FILTERING ---
   const getFieldsForView = (view: string) => {
     switch (view) {
-        case 'Clients': return { first_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
+        case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
         case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', departure_date: '', amount: 0, status: 'Confirmed' };
         case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', notes: '' };
         case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: ''};
@@ -907,10 +935,56 @@ export default function DashboardPage() {
   
   const FormModal = () => {
     const [formData, setFormData] = useState<any>({});
+    const [initialized, setInitialized] = useState(false);
+    const storageKey = useMemo(() => `form_${activeView}`, [activeView]);
 
+    // Initialize form data, prefer cached draft when adding
     useEffect(() => {
-        setFormData(modalMode === 'edit' && selectedItem ? selectedItem : getFieldsForView(activeView));
-    }, [openModal, modalMode, selectedItem, activeView]);
+        if (modalMode === 'edit' && selectedItem) {
+            setFormData(selectedItem);
+            setInitialized(true);
+            return;
+        }
+        // For add mode, restore from sessionStorage if available and non-empty
+        try {
+          const cached = typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed && Object.keys(parsed).length > 0) {
+              setFormData(parsed);
+              setInitialized(true);
+              return;
+            }
+          }
+          const defaults = getFieldsForView(activeView);
+          setFormData(defaults);
+        } catch {
+          setFormData(getFieldsForView(activeView));
+        } finally {
+          setInitialized(true);
+        }
+    }, [openModal, modalMode, selectedItem, activeView, storageKey]);
+
+    // Persist draft while typing to avoid data loss on tab blur/minimize
+    useEffect(() => {
+      if (!openModal) return;
+      if (!initialized) return; // avoid writing empty object on first render
+      if (!formData || Object.keys(formData).length === 0) return;
+      try { sessionStorage.setItem(storageKey, JSON.stringify(formData)); } catch {}
+    }, [formData, openModal, storageKey, initialized]);
+
+    // Cleanup draft on unmount (modal close)
+    useEffect(() => {
+      return () => {
+        try { sessionStorage.removeItem(storageKey); } catch {}
+      };
+    }, [storageKey]);
+
+    const formKeys = useMemo(() => {
+      const keys = Object.keys(formData || {});
+      if (keys.length > 0) return keys.filter(k => k !== 'id' && k !== 'created_at');
+      return Object.keys(getFieldsForView(activeView)).filter(k => k !== 'id' && k !== 'created_at');
+    }, [formData, activeView]);
 
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
@@ -938,101 +1012,121 @@ export default function DashboardPage() {
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (modalMode === 'add') handleAddItem(formData);
-        else handleUpdateItem(formData);
+        try { sessionStorage.removeItem(storageKey); } catch {}
+
+        // Sanitize values: allow blanks by converting ''/undefined to null, and parse numeric fields
+        const defs = getFieldsForView(activeView) as any;
+        const sanitized: any = {};
+        Object.keys(defs).forEach((k) => {
+          const raw = (formData as any)[k];
+          if (raw === '' || typeof raw === 'undefined') {
+            sanitized[k] = null;
+          } else if (typeof defs[k] === 'number') {
+            const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
+            sanitized[k] = Number.isFinite(n) ? n : null;
+          } else {
+            sanitized[k] = raw;
+          }
+        });
+        if (modalMode === 'edit' && formData && 'id' in (formData as any)) {
+          sanitized.id = (formData as any).id;
+        }
+
+        if (modalMode === 'add') handleAddItem(sanitized);
+        else handleUpdateItem(sanitized);
     };
     
     return (
-        <Dialog open={openModal} onClose={handleCloseModal} maxWidth="sm" fullWidth>
-            <DialogTitle>{modalMode === 'add' ? 'Add New' : 'Edit'} {activeView === 'Client Insight' ? 'Client' : activeView.slice(0, -1)}</DialogTitle>
-            <form onSubmit={handleSubmit}>
-                <LocalizationProvider dateAdapter={AdapterDayjs}>
-                    <DialogContent dividers>
-                        <Grid container spacing={2} sx={{pt: 1}}>
-                        {Object.keys(formData).filter(k => k !== 'id' && k !== 'created_at').map(key => (
-                            <Grid item xs={12} sm={key.includes('notes') || key.includes('special_requirement') ? 12 : 6} key={key}>
-                                {key.includes('client_id') ? (
-                                    <FormControl fullWidth required>
-                                        <InputLabel id={`${key}-label`}>Client</InputLabel>
-                                        <Select
-                                            labelId={`${key}-label`}
-                                            id={key}
-                                            name="client_id"
-                                            value={formData[key] || ''}
-                                            label="Client"
-                                            onChange={(e) => handleFormChange(e as any)}
-                                        >
-                                            <MenuItem value=""><em>None</em></MenuItem>
-                                            {clients.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
-                                        </Select>
-                                    </FormControl>
-                                ) : key.includes('booking_id') && activeView === 'Policies' ? (
-                                    <FormControl fullWidth required>
-                                        <InputLabel id={`${key}-label`}>Booking</InputLabel>
-                                        <Select
-                                            labelId={`${key}-label`}
-                                            id={key}
-                                            name="booking_id"
-                                            value={formData[key] || ''}
-                                            label="Booking"
-                                            onChange={(e) => handleFormChange(e as any)}
-                                        >
-                                            <MenuItem value=""><em>None</em></MenuItem>
-                                            {bookings.map(b => <MenuItem key={b.id} value={b.id}>{b.pnr || b.reference} ({clients.find(c => c.id === b.client_id)?.first_name || 'N/A'})</MenuItem>)}
-                                        </Select>
-                                    </FormControl>
-                                ) : key.includes('date') || key.includes('dob') || key.includes('check_in') || key.includes('check_out') || key.includes('start_date') || key.includes('end_date') ? (
-                                    <DatePicker
-                                        label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                        value={formData[key] ? dayjs(formData[key]) : null}
-                                        onChange={(date) => handleDateChange(key, date)}
-                                        slotProps={{ textField: { fullWidth: true, required: true } }}
-                                    />
-                                ) : key === 'status' ? (
-                                    <FormControl fullWidth required>
-                                        <InputLabel id={`${key}-label`}>Status</InputLabel>
-                                        <Select
-                                            labelId={`${key}-label`}
-                                            id={key}
-                                            name="status"
-                                            value={formData[key] || ''}
-                                            label="Status"
-                                            onChange={(e) => handleFormChange(e as any)}
-                                        >
-                                            <MenuItem value="Confirmed">Confirmed</MenuItem>
-                                            <MenuItem value="Pending">Pending</MenuItem>
-                                            <MenuItem value="Cancelled">Cancelled</MenuItem>
-                                        </Select>
-                                    </FormControl>
-                                ) : key === 'vip_status' ? (
-                                    <FormControl fullWidth>
-                                        <label>
-                                            <input
-                                                type="checkbox"
-                                                name="vip_status"
-                                                checked={!!formData[key]} // Ensure it's a boolean
-                                                onChange={handleFormChange}
-                                            /> VIP Status
-                                        </label>
-                                    </FormControl>
-                                ) : (
-                                    <TextField name={key} label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                        type={typeof (getFieldsForView(activeView) as any)[key] === 'number' ? 'number' : 'text'}
-                                        fullWidth value={formData[key] || ''} onChange={handleFormChange} required={key !== 'notes' && key !== 'special_requirement' && key !== 'vip_status' && key !== 'amount' && key !== 'departure_date' && key !== 'status'}
-                                        multiline={key.includes('notes') || key.includes('special_requirement')}
-                                        rows={key.includes('notes') || key.includes('special_requirement') ? 3 : 1}
-                                    />
-                                )}
-                            </Grid>
-                        ))}
-                        </Grid>
-                    </DialogContent>
-                </LocalizationProvider>
-                <DialogActions>
-                    <Button onClick={handleCloseModal}>Cancel</Button>
-                    <Button type="submit" variant="contained">{modalMode === 'add' ? 'Add' : 'Update'}</Button>
-                </DialogActions>
-            </form>
+        <Dialog open={openModal} onClose={handleCloseModal} maxWidth="sm" fullWidth keepMounted>
+          <DialogTitle>{modalMode === 'add' ? 'Add New' : 'Edit'} {activeView === 'Client Insight' ? 'Client' : activeView.slice(0, -1)}</DialogTitle>
+          <form onSubmit={handleSubmit}>
+              <LocalizationProvider dateAdapter={AdapterDayjs}>
+                  <DialogContent dividers>
+                      <Grid container spacing={2} sx={{pt: 1}}>
+                      {formKeys.map(key => (
+                          <Grid item xs={12} sm={key.includes('notes') || key.includes('special_requirement') ? 12 : 6} key={key}>
+                              {key.includes('client_id') ? (
+                                  <FormControl fullWidth>
+                                      <InputLabel id={`${key}-label`}>Client</InputLabel>
+                                      <Select
+                                          labelId={`${key}-label`}
+                                          id={key}
+                                          name="client_id"
+                                          value={formData[key] || ''}
+                                          label="Client"
+                                          onChange={(e) => handleFormChange(e as any)}
+                                      >
+                                          <MenuItem value=""><em>None</em></MenuItem>
+                                          {clients.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
+                                      </Select>
+                                  </FormControl>
+                              ) : key.includes('booking_id') && activeView === 'Policies' ? (
+                                  <FormControl fullWidth>
+                                      <InputLabel id={`${key}-label`}>Booking</InputLabel>
+                                      <Select
+                                          labelId={`${key}-label`}
+                                          id={key}
+                                          name="booking_id"
+                                          value={formData[key] || ''}
+                                          label="Booking"
+                                          onChange={(e) => handleFormChange(e as any)}
+                                      >
+                                          <MenuItem value=""><em>None</em></MenuItem>
+                                          {bookings.map(b => <MenuItem key={b.id} value={b.id}>{b.pnr || b.reference} ({clients.find(c => c.id === b.client_id)?.first_name || 'N/A'})</MenuItem>)}
+                                      </Select>
+                                  </FormControl>
+                              ) : key.includes('date') || key.includes('dob') || key.includes('check_in') || key.includes('check_out') || key.includes('start_date') || key.includes('end_date') ? (
+                                  <DatePicker
+                                      label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                      value={formData[key] ? dayjs(formData[key]) : null}
+                                      onChange={(date) => handleDateChange(key, date)}
+                                      slotProps={{ textField: { fullWidth: true } }}
+                                  />
+                              ) : key === 'status' ? (
+                                  <FormControl fullWidth>
+                                      <InputLabel id={`${key}-label`}>Status</InputLabel>
+                                      <Select
+                                          labelId={`${key}-label`}
+                                          id={key}
+                                          name="status"
+                                          value={formData[key] || ''}
+                                          label="Status"
+                                          onChange={(e) => handleFormChange(e as any)}
+                                      >
+                                          <MenuItem value="Confirmed">Confirmed</MenuItem>
+                                          <MenuItem value="Pending">Pending</MenuItem>
+                                          <MenuItem value="Cancelled">Cancelled</MenuItem>
+                                      </Select>
+                                  </FormControl>
+                              ) : key === 'vip_status' ? (
+                                  <FormControl fullWidth>
+                                      <label>
+                                          <input
+                                              type="checkbox"
+                                              name="vip_status"
+                                              checked={!!formData[key]}
+                                              onChange={handleFormChange}
+                                          /> VIP Status
+                                      </label>
+                                  </FormControl>
+                              ) : (
+                                  <TextField name={key} label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                      type={typeof (getFieldsForView(activeView) as any)[key] === 'number' ? 'number' : 'text'}
+                                      fullWidth value={formData[key] ?? ''} onChange={handleFormChange}
+                                      multiline={key.includes('notes') || key.includes('special_requirement')}
+                                      rows={key.includes('notes') || key.includes('special_requirement') ? 3 : 1}
+                                  />
+                              )}
+                          </Grid>
+                      ))}
+                      </Grid>
+                  </DialogContent>
+              </LocalizationProvider>
+              <DialogActions>
+                  <Button onClick={handleCloseModal}>Cancel</Button>
+                  <Button type="submit" variant="contained">{modalMode === 'add' ? 'Add' : 'Update'}</Button>
+              </DialogActions>
+          </form>
         </Dialog>
     )
   }
@@ -1826,13 +1920,4 @@ const NoteEditModal: React.FC<NoteEditModalProps> = ({ open, onClose, note, onSa
         </Dialog>
     );
 };
-
-
-// function onShowSnackbar(arg0: string, arg1: string) {
-//     throw new Error('Function not implemented.');
-// }
-// function setDocError(arg0: string | null) {
-//     throw new Error('Function not implemented.');
-// }
-// }
 
