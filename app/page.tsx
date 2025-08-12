@@ -9,7 +9,8 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Fade, InputAdornment,
   Select, MenuItem, FormControl, InputLabel, Stack, Link,
   Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar,
-  Checkbox, FormControlLabel
+  Checkbox, FormControlLabel,
+  Collapse
 } from '@mui/material'
 import { Grid } from '@mui/material';
 import {
@@ -20,7 +21,7 @@ import {
   Logout as LogoutIcon, UploadFile as UploadFileIcon, Description as DescriptionIcon,
   ExpandMore as ExpandMoreIcon, AccountBox as AccountBoxIcon, Download as DownloadIcon, Share as ShareIcon,
   Analytics as AnalyticsIcon, Notes as NotesIcon, Star as StarIcon, Email as EmailIcon, Phone as PhoneIcon,
-  Visibility as VisibilityIcon
+  Visibility as VisibilityIcon, ExpandLess as ExpandLessIcon
 } from '@mui/icons-material'
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
@@ -42,7 +43,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // --- TYPE DEFINITIONS ---
 interface BaseEntity { id: string; created_at: string; }
-export interface Client extends BaseEntity { first_name: string; last_name: string; email_id: string; mobile_no: string; dob: string; nationality: string; vip_status?: boolean; } // Added vip_status
+export interface Client extends BaseEntity { first_name: string; middle_name?: string; last_name: string; email_id: string; mobile_no: string; dob: string; nationality: string; vip_status?: boolean; } // Added vip_status
 export interface Booking extends BaseEntity { client_id: string; reference: string; vendor: string; destination: string; check_in: string; check_out: string; confirmation_no: string; seat_reference?: string; meal_preference?: string; special_requirement?: string; booking_type: string; pnr: string; departure_date?: string; amount?: number; status?: 'Confirmed' | 'Pending' | 'Cancelled'; } // Made optional fields truly optional
 export interface Visa extends BaseEntity { client_id: string; country: string; visa_type: string; visa_number: string; issue_date: string; expiry_date: string; notes: string; }
 export interface Passport extends BaseEntity { client_id: string; passport_number: string; issue_date: string; expiry_date: string; }
@@ -1488,9 +1489,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     const [tabValue, setTabValue] = useState(0);
     const [newNote, setNewNote] = useState('');
     const [searchResults, setSearchResults] = useState<Client[]>([]);
-
-    const [isNoteEditModalOpen, setIsNoteEditModalOpen] = useState(false);
-    const [noteToEdit, setNoteToEdit] = useState<ClientNote | null>(null);
+    const [showDetails, setShowDetails] = useState(false); // toggle for detailed fields
 
     const handleSearch = () => {
         const term = insightSearchTerm.trim().toLowerCase();
@@ -1552,6 +1551,9 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
         }
     };
 
+    const [isNoteEditModalOpen, setIsNoteEditModalOpen] = useState(false);
+    const [noteToEdit, setNoteToEdit] = useState<ClientNote | null>(null);
+
     const handleOpenNoteEditModal = (note: ClientNote) => {
         setNoteToEdit(note);
         setIsNoteEditModalOpen(true);
@@ -1574,22 +1576,30 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     };
 
     const handleDownloadPdf = () => {
-        const insightContent = document.getElementById('insight-content');
-        if (insightContent) {
-            onShowSnackbar({ open: true, message: 'Generating PDF...' });
-            html2canvas(insightContent).then(canvas => {
-                const imgData = canvas.toDataURL('image/png');
-                const pdf = new jsPDF('p', 'mm', 'a4');
-                const pdfWidth = pdf.internal.pageSize.getWidth();
-                const canvasWidth = canvas.width;
-                const canvasHeight = canvas.height;
-                const ratio = canvasWidth / canvasHeight;
-                const width = pdfWidth;
-                const height = width / ratio;
-                pdf.addImage(imgData, 'PNG', 0, 0, width, height);
-                pdf.save(`client-insight-${selectedClient?.first_name}-${selectedClient?.last_name}.pdf`);
-            });
-        }
+        const expandBefore = showDetails;
+        if (!expandBefore) setShowDetails(true);
+        // allow DOM to paint expanded content before capture
+        setTimeout(() => {
+            const insightContent = document.getElementById('insight-content');
+            if (insightContent) {
+                onShowSnackbar({ open: true, message: 'Generating PDF...' });
+                html2canvas(insightContent).then(canvas => {
+                    const imgData = canvas.toDataURL('image/png');
+                    const pdf = new jsPDF('p', 'mm', 'a4');
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const canvasWidth = canvas.width;
+                    const canvasHeight = canvas.height;
+                    const ratio = canvasWidth / canvasHeight;
+                    const width = pdfWidth;
+                    const height = width / ratio;
+                    pdf.addImage(imgData, 'PNG', 0, 0, width, height);
+                    pdf.save(`client-insight-${selectedClient?.first_name}-${selectedClient?.last_name}.pdf`);
+                    if (!expandBefore) setShowDetails(false);
+                });
+            } else if (!expandBefore) {
+                setShowDetails(false);
+            }
+        }, 60);
     };
 
     const analytics = useMemo(() => {
@@ -1625,211 +1635,255 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     return (
         <Fade in={true}>
             <Box>
-                <Paper sx={{ p: 2, mb: 3, display: 'flex', gap: 2, alignItems: 'center', borderRadius: 2 }}>
-                    <TextField
-                        label="Search Client by Name, Email, or Phone"
-                        variant="outlined"
-                        fullWidth
-                        value={insightSearchTerm}
-                        onChange={e => setInsightSearchTerm(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                        InputProps={{ startAdornment: (<InputAdornment position="start"><SearchIcon /></InputAdornment>) }}
-                    />
-                    <Button variant="contained" onClick={handleSearch} startIcon={<SearchIcon />} sx={{height: '56px'}}>Search</Button>
-                </Paper>
+                <Box sx={{ p: 2, bgcolor: '#fff', borderRadius: 2, boxShadow: 1 }}>
+                    <Paper sx={{ p: 2, mb: 3, display: 'flex', gap: 2, alignItems: 'center', borderRadius: 2 }}>
+                        <TextField
+                            label="Search Client by Name, Email, or Phone"
+                            variant="outlined"
+                            fullWidth
+                            value={insightSearchTerm}
+                            onChange={e => setInsightSearchTerm(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                            InputProps={{ startAdornment: (<InputAdornment position="start"><SearchIcon /></InputAdornment>) }}
+                        />
+                        <Button variant="contained" onClick={handleSearch} startIcon={<SearchIcon />} sx={{height: '56px'}}>Search</Button>
+                    </Paper>
+                </Box>
 
                 {searchResults.length > 0 && (
-                    <Paper sx={{ p: 2, mb: 3, borderRadius: 2 }}>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>{searchResults.length} result{searchResults.length > 1 ? 's' : ''}</Typography>
-                        <List sx={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #eee', borderRadius: 1 }}>
-                            {searchResults.map((c) => (
-                                <ListItem key={c.id} disablePadding divider selected={selectedClient?.id === c.id}>
-                                    <ListItemButton onClick={() => setSelectedClient(c)}>
-                                        <ListItemIcon><Avatar>{(c.first_name && c.first_name[0]) || '?'}</Avatar></ListItemIcon>
-                                        <ListItemText primary={`${c.first_name} ${c.last_name}`} secondary={`${c.email_id} • ${c.mobile_no}`} />
-                                    </ListItemButton>
-                                </ListItem>
-                            ))}
-                        </List>
-                    </Paper>
-                )}
+                        <Paper sx={{ p: 2, mb: 3, borderRadius: 2 }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>{searchResults.length} result{searchResults.length > 1 ? 's' : ''}</Typography>
+                            <List sx={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #eee', borderRadius: 1 }}>
+                                {searchResults.map((c) => (
+                                    <ListItem key={c.id} disablePadding divider selected={selectedClient?.id === c.id}>
+                                        <ListItemButton onClick={() => setSelectedClient(c)}>
+                                            <ListItemIcon><Avatar>{(c.first_name && c.first_name[0]) || '?'}</Avatar></ListItemIcon>
+                                            <ListItemText primary={`${c.first_name} ${c.last_name}`} secondary={`${c.email_id} • ${c.mobile_no}`} />
+                                        </ListItemButton>
+                                    </ListItem>
+                                ))}
+                            </List>
+                        </Paper>
+                        
+                    )}
 
-                {!selectedClient && searchResults.length === 0 && (
-                    <Paper sx={{p: 4, textAlign: 'center', borderRadius: 2}}>
-                        <AccountBoxIcon sx={{fontSize: 60, color: 'text.secondary', mb: 2}} />
-                        <Typography variant="h6" color="text.secondary">Search for a client to see their insights.</Typography>
-                    </Paper>
-                )}
+                    {!selectedClient && searchResults.length === 0 && (
+                        <Paper sx={{p: 4, textAlign: 'center', borderRadius: 2}}>
+                            <AccountBoxIcon sx={{fontSize: 60, color: 'text.secondary', mb: 2}} />
+                            <Typography variant="h6" color="text.secondary">Search for a client to see their insights.</Typography>
+                        </Paper>
+                    )}
 
-                {selectedClient && (
-                    <Box id="insight-content">
-                        <Grid container spacing={3}>
-                            {/* Client Summary Card */}
-                            <Grid item xs={12}>
-                                <Paper elevation={3} sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 3, borderRadius: 2 }}>
-                                    <Avatar sx={{ width: 90, height: 90, bgcolor: 'primary.main', fontSize: '2.5rem' }}>{selectedClient.first_name[0]}</Avatar>
-                                    <Box flexGrow={1}>
-                                        <Typography variant="h4" component="div" sx={{fontWeight: 'bold', mb: 0.5}}>
-                                            {selectedClient.first_name} {selectedClient.last_name}
-                                            {selectedClient.vip_status && <Chip icon={<StarIcon />} label="VIP Client" color="secondary" size="medium" sx={{ ml: 2, verticalAlign: 'middle' }} />}
-                                        </Typography>
-                                        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="flex-start">
-                                            <Chip icon={<EmailIcon fontSize="small" />} label={selectedClient.email_id} size="small" />
-                                            <Chip icon={<PhoneIcon fontSize="small" />} label={selectedClient.mobile_no} size="small" />
-                                            <Chip icon={<CakeIcon fontSize="small" />} label={`DOB: ${dayjs(selectedClient.dob).format('YYYY-MM-DD')}`} size="small" />
-                                            <Chip label={`Nationality: ${selectedClient.nationality}`} size="small" />
-                                        </Stack>
-                                    </Box>
-                                    <Stack direction="row" spacing={1} sx={{alignSelf: 'flex-start'}}>
-                                        <Tooltip title="Edit Client Details">
-                                            <Button variant="outlined" startIcon={<EditIcon />} onClick={() => onOpenModal('edit', selectedClient, 'Clients')}>Edit</Button>
-                                        </Tooltip>
-                                        <Tooltip title="Delete Client">
-                                            <Button variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => onDeleteItem(selectedClient.id, 'Clients')}>Delete</Button>
-                                        </Tooltip>
-                                        <Tooltip title="Download Client Report (PDF)">
-                                            <Button variant="contained" startIcon={<DownloadIcon />} onClick={handleDownloadPdf}>PDF Report</Button>
-                                        </Tooltip>
-                                    </Stack>
-                                </Paper>
-                            </Grid>
-                            
-                            {/* Analytics Section */}
-                            <Grid item xs={12} md={6}>
-                                <Paper elevation={3} sx={{ p: 3, height: '100%', borderRadius: 2 }}>
-                                    <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Client Analytics</Typography>
-                                    <Stack spacing={2} sx={{ mt: 2 }}>
-                                        <Box display="flex" justifyContent="space-between" alignItems="center">
-                                            <Typography variant="body1">Total Bookings:</Typography>
-                                            <Typography variant="h6" color="primary.main">{analytics.numTrips}</Typography>
-                                        </Box>
-                                        <Box display="flex" justifyContent="space-between" alignItems="center">
-                                            <Typography variant="body1">Total Spend:</Typography>
-                                            <Typography variant="h6" color="primary.main">${analytics.totalSpend.toFixed(2)}</Typography>
-                                        </Box>
-                                        <Box display="flex" justifyContent="space-between" alignItems="center">
-                                            <Typography variant="body1">Average Spend per Trip:</Typography>
-                                            <Typography variant="h6" color="primary.main">${analytics.avgSpend.toFixed(2)}</Typography>
-                                        </Box>
-                                    </Stack>
-                                    <Box sx={{mt: 3, height: 200}}>
-                                        <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>Top Destinations</Typography>
-                                        <ResponsiveContainer width="100%" height="90%">
-                                            <BarChart data={analytics.destinations} layout="vertical" margin={{ left: 50, right: 10 }}>
-                                                <YAxis type="category" dataKey="name" width={80} style={{fontSize: '0.8rem'}} />
-                                                <XAxis type="number" allowDecimals={false} />
-                                                <RechartsTooltip />
-                                                <Bar dataKey="Trips" fill="#82ca9d" radius={[4, 4, 0, 0]} barSize={20} />
-                                            </BarChart>
-                                        </ResponsiveContainer>
-                                    </Box>
-                                </Paper>
-                            </Grid>
-
-                            {/* Reminders Section */}
-                            <Grid item xs={12} md={6}>
-                                <Paper elevation={3} sx={{ p: 3, height: '100%', borderRadius: 2 }}>
-                                    <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Client Reminders</Typography>
-                                    <List>
-                                        {clientData.reminders.length > 0 ? (
-                                            clientData.reminders.map((r: Reminder, index: number) => (
-                                                <ListItem key={index} divider sx={{ alignItems: 'flex-start' }}>
-                                                    <ListItemIcon sx={{ minWidth: '40px', mt: 0.5 }}>{getReminderIcon(r.type)}</ListItemIcon>
-                                                    <ListItemText
-                                                        primary={<Typography variant="body1" sx={{fontWeight: 'medium'}}>{r.type} for {r.name}</Typography>}
-                                                        secondary={
-                                                            <>
-                                                                {r.type.includes('Passport') || r.type.includes('Visa') || r.type.includes('Policy') ? 
-                                                                    `Expires: ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}` : ''}
-                                                                {r.type === 'Booking' ? `Departure: ${dayjs(r.departure_date).format('YYYY-MM-DD')}` : ''}
-                                                                {r.type === 'Birthday' ? `Birthday: ${dayjs(r.dob).format('MM-DD')}` : ''}
-                                                                {r.days_left !== undefined && r.days_left >= 0 && 
-                                                                    <Typography component="span" variant="body2" sx={{ display: 'block' }} color={r.days_left <= 7 ? "error.main" : "warning.main"}>
-                                                                        {r.days_left === 0 ? 'Due Today' : `In ${r.days_left} days`}
-                                                                    </Typography>
-                                                                }
-                                                                {r.days_left !== undefined && r.days_left < 0 && 
-                                                                    <Typography component="span" variant="body2" sx={{ display: 'block' }} color="error.main" >
-                                                                        Expired {Math.abs(r.days_left)} days ago
-                                                                    </Typography>
-                                                                }
-                                                            </>
-                                                        }
-                                                    />
-                                                </ListItem>
-                                            ))
-                                        ) : (
-                                            <ListItem><ListItemText primary="No specific reminders for this client." sx={{color: 'text.secondary'}} /></ListItem>
-                                        )}
-                                    </List>
-                                </Paper>
-                            </Grid>
-
-
-                            {/* Main Details Tabs */}
-                            <Grid item xs={12}>
-                                <Paper elevation={3} sx={{ mt: 0, p: 2, borderRadius: 2 }}>
-                                    <Tabs value={tabValue} onChange={(e, val) => setTabValue(val)} indicatorColor="primary" textColor="primary" variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile sx={{borderBottom: 1, borderColor: 'divider'}}>
-                                        <Tab label={`Bookings (${clientData.bookings.length})`} />
-                                        <Tab label={`Visas (${clientData.visas.length})`} />
-                                        <Tab label={`Passports (${clientData.passports.length})`} />
-                                        <Tab label={`Policies (${clientData.policies.length})`} />
-                                        <Tab label="Documents" />
-                                        <Tab label={`Notes (${clientData.notes.length})`} />
-                                    </Tabs>
-                                    <Box sx={{pt: 2}}> {/* Removed extra padding around content inside tabs */}
-                                        {tabValue === 0 && <InsightTable data={clientData.bookings} columns={bookingCols} />}
-                                        {tabValue === 1 && <InsightTable data={clientData.visas} columns={visaCols} />}
-                                        {tabValue === 2 && <InsightTable data={clientData.passports} columns={passportCols} />}
-                                        {tabValue === 3 && <InsightTable data={clientData.policies} columns={policyCols} />}
-                                        {tabValue === 4 && <ClientDocumentsView client={selectedClient} onUpdate={onUpdate} onShowSnackbar={onShowSnackbar} />}
-                                        {tabValue === 5 && (
-                                            <Box>
-                                                <List sx={{ maxHeight: 300, overflowY: 'auto', border: '1px solid #eee', borderRadius: 1, mb: 2 }}>
-                                                    {clientData.notes.length > 0 ? (
-                                                        clientData.notes.map((note: ClientNote) => (
-                                                            <ListItem key={note.id} divider secondaryAction={
-                                                                <>
-                                                                    <Tooltip title="Edit Note">
-                                                                        <IconButton edge="end" aria-label="edit-note" onClick={() => handleOpenNoteEditModal(note)}>
-                                                                            <EditIcon color="info" />
-                                                                        </IconButton>
-                                                                    </Tooltip>
-                                                                    <Tooltip title="Delete Note">
-                                                                        <IconButton edge="end" aria-label="delete-note" onClick={() => handleDeleteNote(note.id)}>
-                                                                            <DeleteIcon color="error" />
-                                                                        </IconButton>
-                                                                    </Tooltip>
-                                                                </>
-                                                            }>
-                                                                <ListItemText primary={note.note} secondary={`By ${note.user} on ${dayjs(note.created_at).format('YYYY-MM-DD HH:mm')}`} />
-                                                            </ListItem>
-                                                        ))
-                                                    ) : (
-                                                        <ListItem><ListItemText primary="No notes for this client." sx={{color: 'text.secondary'}} /></ListItem>
-                                                    )}
-                                                </List>
-                                                <TextField label="Add a new note" fullWidth multiline rows={3} value={newNote} onChange={e => setNewNote(e.target.value)} sx={{mt: 0}} variant="outlined" />
-                                                <Button variant="contained" onClick={handleAddNote} sx={{mt: 2}}>Add Note</Button>
+                    {selectedClient && (
+                        <Box id="insight-content">
+                            <Grid container spacing={3}>
+                                {/* Client Summary Card */}
+                                <Grid item xs={12}>
+                                    <Paper elevation={3} sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 3, borderRadius: 2 }}>
+                                        <Avatar sx={{ width: 90, height: 90, bgcolor: 'primary.main', fontSize: '2.5rem' }}>{selectedClient?.first_name?.[0]}</Avatar>
+                                        <Box flexGrow={1}>
+                                            <Typography variant="h4" component="div" sx={{fontWeight: 'bold', mb: 0.5}}>
+                                                {selectedClient?.first_name} {selectedClient?.middle_name ? `${selectedClient.middle_name} ` : ''}{selectedClient?.last_name}
+                                                {selectedClient?.vip_status && <Chip icon={<StarIcon />} label="VIP Client" color="secondary" size="medium" sx={{ ml: 2, verticalAlign: 'middle' }} />}
+                                            </Typography>
+                                            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="flex-start">
+                                                <Chip icon={<EmailIcon fontSize="small" />} label={selectedClient?.email_id ?? ''} size="small" />
+                                                <Chip icon={<PhoneIcon fontSize="small" />} label={selectedClient?.mobile_no ?? ''} size="small" />
+                                                <Chip icon={<CakeIcon fontSize="small" />} label={`DOB: ${selectedClient?.dob && dayjs(selectedClient?.dob).isValid() ? dayjs(selectedClient?.dob).format('YYYY-MM-DD') : 'N/A'}`} size="small" />
+                                                <Chip label={`Nationality: ${selectedClient?.nationality ?? 'N/A'}`} size="small" />
+                                            </Stack>
+                                            {/* --- Added Detailed Client Info Grid --- */}
+                                            <Box sx={{ mt: 2 }}>
+                                              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                                                <Button size="small" variant="outlined" onClick={() => setShowDetails(s=>!s)} startIcon={showDetails ? <ExpandLessIcon /> : <ExpandMoreIcon />}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>
+                                              </Stack>
+                                              <Collapse in={showDetails} timeout="auto" unmountOnExit>
+                                                <Grid container spacing={1}>
+                                                  {(() => {
+                                                    if (!selectedClient) return null;
+                                                    const client = selectedClient!; // safe after the early return
+                                                    const age = dayjs(client.dob).isValid() ? dayjs().diff(client.dob, 'year') : 'N/A';
+                                                    const details: { label: string; value: any }[] = [
+                                                      { label: 'First Name', value: client.first_name },
+                                                      ...(client.middle_name ? [{ label: 'Middle Name', value: client.middle_name }] : []),
+                                                      { label: 'Last Name', value: client.last_name },
+                                                      { label: 'Email', value: client.email_id },
+                                                      { label: 'Phone', value: client.mobile_no },
+                                                      { label: 'DOB', value: dayjs(client.dob).isValid() ? dayjs(client.dob).format('YYYY-MM-DD') : 'N/A' },
+                                                      { label: 'Age', value: age },
+                                                      { label: 'Nationality', value: client.nationality },
+                                                      { label: 'VIP Status', value: client.vip_status ? 'Yes' : 'No' },
+                                                      { label: 'Total Bookings', value: clientData.bookings.length },
+                                                      { label: 'Total Visas', value: clientData.visas.length },
+                                                      { label: 'Total Passports', value: clientData.passports.length },
+                                                      { label: 'Total Policies', value: clientData.policies.length },
+                                                      { label: 'Total Spend', value: `$${analytics.totalSpend.toFixed(2)}` },
+                                                      { label: 'Avg Spend / Trip', value: `$${analytics.avgSpend.toFixed(2)}` },
+                                                      { label: 'Popular Destination', value: analytics.popularDestination },
+                                                    ];
+                                                    return details.map(d => (
+                                                      <Grid item xs={12} sm={6} md={4} key={d.label}>
+                                                        <Paper variant="outlined" sx={{ p: 1, borderRadius: 1, bgcolor: 'background.default' }}>
+                                                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>{d.label}</Typography>
+                                                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{d.value ?? '—'}</Typography>
+                                                        </Paper>
+                                                      </Grid>
+                                                    ))
+                                                  })()}
+                                                </Grid>
+                                              </Collapse>
                                             </Box>
-                                        )}
-                                    </Box>
-                                </Paper>
-                            </Grid>
-                        </Grid>
-                    </Box>
-                )}
+                                            {/* --- end toggle section --- */}
+                                        </Box>
+                                        <Stack direction="row" spacing={1} sx={{alignSelf: 'flex-start'}}>
+                                            <Tooltip title="Edit Client Details">
+                                                <Button variant="outlined" startIcon={<EditIcon />} onClick={() => onOpenModal('edit', selectedClient, 'Clients')}>Edit</Button>
+                                            </Tooltip>
+                                            <Tooltip title="Delete Client">
+                                                <Button variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => onDeleteItem(selectedClient.id, 'Clients')}>Delete</Button>
+                                            </Tooltip>
+                                            <Tooltip title="Download Client Report (PDF)">
+                                                <Button variant="contained" startIcon={<DownloadIcon />} onClick={handleDownloadPdf}>PDF Report</Button>
+                                            </Tooltip>
+                                        </Stack>
+                                    </Paper>
+                                </Grid>
+                                
+                                {/* Analytics Section */}
+                                <Grid item xs={12} md={6}>
+                                    <Paper elevation={3} sx={{ p: 3, height: '100%', borderRadius: 2 }}>
+                                        <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Client Analytics</Typography>
+                                        <Stack spacing={2} sx={{ mt: 2 }}>
+                                            <Box display="flex" justifyContent="space-between" alignItems="center">
+                                                <Typography variant="body1">Total Bookings:</Typography>
+                                                <Typography variant="h6" color="primary.main">{analytics.numTrips}</Typography>
+                                            </Box>
+                                            <Box display="flex" justifyContent="space-between" alignItems="center">
+                                                <Typography variant="body1">Total Spend:</Typography>
+                                                <Typography variant="h6" color="primary.main">${analytics.totalSpend.toFixed(2)}</Typography>
+                                            </Box>
+                                            <Box display="flex" justifyContent="space-between" alignItems="center">
+                                                <Typography variant="body1">Average Spend per Trip:</Typography>
+                                                <Typography variant="h6" color="primary.main">${analytics.avgSpend.toFixed(2)}</Typography>
+                                            </Box>
+                                        </Stack>
+                                        <Box sx={{mt: 3, height: 200}}>
+                                            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>Top Destinations</Typography>
+                                            <ResponsiveContainer width="100%" height="90%">
+                                                <BarChart data={analytics.destinations} layout="vertical" margin={{ left: 50, right: 10 }}>
+                                                    <YAxis type="category" dataKey="name" width={80} style={{fontSize: '0.8rem'}} />
+                                                    <XAxis type="number" allowDecimals={false} />
+                                                    <RechartsTooltip />
+                                                    <Bar dataKey="Trips" fill="#82ca9d" radius={[4, 4, 0, 0]} barSize={20} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </Box>
+                                    </Paper>
+                                </Grid>
 
-                {/* Note Edit Modal */}
-                {isNoteEditModalOpen && noteToEdit && (
-                    <NoteEditModal
-                        open={isNoteEditModalOpen}
-                        onClose={handleCloseNoteEditModal}
-                        note={noteToEdit}
-                        onSave={handleUpdateNote}
-                    />
-                )}
-            </Box>
+                                {/* Reminders Section */}
+                                <Grid item xs={12} md={6}>
+                                    <Paper elevation={3} sx={{ p: 3, height: '100%', borderRadius: 2 }}>
+                                        <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Client Reminders</Typography>
+                                        <List>
+                                            {clientData.reminders.length > 0 ? (
+                                                clientData.reminders.map((r: Reminder, index: number) => (
+                                                    <ListItem key={index} divider sx={{ alignItems: 'flex-start' }}>
+                                                        <ListItemIcon sx={{ minWidth: '40px', mt: 0.5 }}>{getReminderIcon(r.type)}</ListItemIcon>
+                                                        <ListItemText
+                                                            primary={<Typography variant="body1" sx={{fontWeight: 'medium'}}>{r.type} for {r.name}</Typography>}
+                                                            secondary={
+                                                                <>
+                                                                    {r.type.includes('Passport') || r.type.includes('Visa') || r.type.includes('Policy') ? 
+                                                                        `Expires: ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}` : ''}
+                                                                    {r.type === 'Booking' ? `Departure: ${dayjs(r.departure_date).format('YYYY-MM-DD')}` : ''}
+                                                                    {r.type === 'Birthday' ? `Birthday: ${dayjs(r.dob).format('MM-DD')}` : ''}
+                                                                    {r.days_left !== undefined && r.days_left >= 0 && 
+                                                                        <Typography component="span" variant="body2" sx={{ display: 'block' }} color={r.days_left <= 7 ? "error.main" : "warning.main"}>
+                                                                            {r.days_left === 0 ? 'Due Today' : `In ${r.days_left} days`}
+                                                                        </Typography>
+                                                                    }
+                                                                    {r.days_left !== undefined && r.days_left < 0 && 
+                                                                        <Typography component="span" variant="body2" sx={{ display: 'block' }} color="error.main" >
+                                                                            Expired {Math.abs(r.days_left)} days ago
+                                                                        </Typography>
+                                                                    }
+                                                                </>
+                                                            }
+                                                        />
+                                                    </ListItem>
+                                                ))
+                                            ) : (
+                                                <ListItem><ListItemText primary="No specific reminders for this client." sx={{color: 'text.secondary'}} /></ListItem>
+                                            )}
+                                        </List>
+                                    </Paper>
+                                </Grid>
+
+
+                                {/* Main Details Tabs */}
+                                <Grid item xs={12}>
+                                    <Paper elevation={3} sx={{ mt: 0, p: 2, borderRadius: 2 }}>
+                                        <Tabs value={tabValue} onChange={(e, val) => setTabValue(val)} indicatorColor="primary" textColor="primary" variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile sx={{borderBottom: 1, borderColor: 'divider'}}>
+                                            <Tab label={`Bookings (${clientData.bookings.length})`} />
+                                            <Tab label={`Visas (${clientData.visas.length})`} />
+                                            <Tab label={`Passports (${clientData.passports.length})`} />
+                                            <Tab label={`Policies (${clientData.policies.length})`} />
+                                            <Tab label="Documents" />
+                                            <Tab label={`Notes (${clientData.notes.length})`} />
+                                        </Tabs>
+                                        <Box sx={{pt: 2}}> {/* Removed extra padding around content inside tabs */}
+                                            {tabValue === 0 && <InsightTable data={clientData.bookings} columns={bookingCols} />}
+                                            {tabValue === 1 && <InsightTable data={clientData.visas} columns={visaCols} />}
+                                            {tabValue === 2 && <InsightTable data={clientData.passports} columns={passportCols} />}
+                                            {tabValue === 3 && <InsightTable data={clientData.policies} columns={policyCols} />}
+                                            {tabValue === 4 && <ClientDocumentsView client={selectedClient} onUpdate={onUpdate} onShowSnackbar={onShowSnackbar} />}
+                                            {tabValue === 5 && (
+                                                <Box>
+                                                    <List sx={{ maxHeight: 300, overflowY: 'auto', border: '1px solid #eee', borderRadius: 1, mb: 2 }}>
+                                                        {clientData.notes.length > 0 ? (
+                                                            clientData.notes.map((note: ClientNote) => (
+                                                                <ListItem key={note.id} divider secondaryAction={
+                                                                    <>
+                                                                        <Tooltip title="Edit Note">
+                                                                            <IconButton edge="end" aria-label="edit-note" onClick={() => handleOpenNoteEditModal(note)}>
+                                                                                <EditIcon color="info" />
+                                                                            </IconButton>
+                                                                        </Tooltip>
+                                                                        <Tooltip title="Delete Note">
+                                                                            <IconButton edge="end" aria-label="delete-note" onClick={() => handleDeleteNote(note.id)}>
+                                                                                <DeleteIcon color="error" />
+                                                                            </IconButton>
+                                                                        </Tooltip>
+                                                                    </>
+                                                                }>
+                                                                    <ListItemText primary={note.note} secondary={`By ${note.user} on ${dayjs(note.created_at).format('YYYY-MM-DD HH:mm')}`} />
+                                                                </ListItem>
+                                                            ))
+                                                        ) : (
+                                                            <ListItem><ListItemText primary="No notes for this client." sx={{color: 'text.secondary'}} /></ListItem>
+                                                        )}
+                                                    </List>
+                                                    <TextField label="Add a new note" fullWidth multiline rows={3} value={newNote} onChange={e => setNewNote(e.target.value)} sx={{mt: 0}} variant="outlined" />
+                                                    <Button variant="contained" onClick={handleAddNote} sx={{mt: 2}}>Add Note</Button>
+                                                </Box>
+                                            )}
+                                        </Box>
+                                    </Paper>
+                                </Grid>
+                            </Grid>
+                    {/* Note Edit Modal */}
+                    {isNoteEditModalOpen && noteToEdit && (
+                        <NoteEditModal
+                            open={isNoteEditModalOpen}
+                            onClose={handleCloseNoteEditModal}
+                            note={noteToEdit}
+                            onSave={handleUpdateNote}
+                        />
+                    )}
+                </Box>
+            )}
+        </Box>
         </Fade>
     );
 };
@@ -1878,4 +1932,3 @@ const NoteEditModal: React.FC<NoteEditModalProps> = ({ open, onClose, note, onSa
         </Dialog>
     );
 };
-
