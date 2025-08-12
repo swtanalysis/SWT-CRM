@@ -8,7 +8,8 @@ import {
   Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Fade, InputAdornment,
   Select, MenuItem, FormControl, InputLabel, Stack, Link,
-  Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar
+  Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar,
+  Checkbox, FormControlLabel
 } from '@mui/material'
 import { Grid } from '@mui/material';
 import {
@@ -478,7 +479,7 @@ export default function DashboardPage() {
   // --- UI CONFIGURATION & FILTERING ---
   const getFieldsForView = (view: string) => {
     switch (view) {
-        case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
+        case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: '', vip_status: false };
         case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', departure_date: '', amount: 0, status: 'Confirmed' };
         case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', notes: '' };
         case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: ''};
@@ -938,197 +939,134 @@ export default function DashboardPage() {
     const [initialized, setInitialized] = useState(false);
     const storageKey = useMemo(() => `form_${activeView}`, [activeView]);
 
-    // Initialize form data, prefer cached draft when adding
     useEffect(() => {
-        if (modalMode === 'edit' && selectedItem) {
-            setFormData(selectedItem);
-            setInitialized(true);
-            return;
-        }
-        // For add mode, restore from sessionStorage if available and non-empty
-        try {
-          const cached = typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
-          if (cached) {
-            const parsed = JSON.parse(cached);
+      if (!openModal) return;
+      if (modalMode === 'edit' && selectedItem) {
+        // deep clone to prevent mutating original reference
+        setFormData(JSON.parse(JSON.stringify(selectedItem)));
+        setInitialized(true);
+        return;
+      }
+      try {
+        const cached = typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
+        if (cached) {
+          const parsed = JSON.parse(cached);
             if (parsed && Object.keys(parsed).length > 0) {
               setFormData(parsed);
               setInitialized(true);
               return;
             }
-          }
-          const defaults = getFieldsForView(activeView);
-          setFormData(defaults);
-        } catch {
-          setFormData(getFieldsForView(activeView));
-        } finally {
-          setInitialized(true);
         }
+      } catch {}
+      const defaults = activeView === 'Client Insight' ? getFieldsForView('Clients') : getFieldsForView(activeView);
+      setFormData(defaults);
+      setInitialized(true);
     }, [openModal, modalMode, selectedItem, activeView, storageKey]);
 
-    // Persist draft while typing to avoid data loss on tab blur/minimize
     useEffect(() => {
-      if (!openModal) return;
-      if (!initialized) return; // avoid writing empty object on first render
-      if (!formData || Object.keys(formData).length === 0) return;
+      if (!openModal || !initialized) return;
       try { sessionStorage.setItem(storageKey, JSON.stringify(formData)); } catch {}
     }, [formData, openModal, storageKey, initialized]);
 
-    // Cleanup draft on unmount (modal close)
-    useEffect(() => {
-      return () => {
-        try { sessionStorage.removeItem(storageKey); } catch {}
-      };
-    }, [storageKey]);
+    useEffect(() => () => { try { sessionStorage.removeItem(storageKey); } catch {} }, [storageKey]);
 
-    const formKeys = useMemo(() => {
-      const keys = Object.keys(formData || {});
-      if (keys.length > 0) return keys.filter(k => k !== 'id' && k !== 'created_at');
-      return Object.keys(getFieldsForView(activeView)).filter(k => k !== 'id' && k !== 'created_at');
-    }, [formData, activeView]);
+    const formKeys = useMemo(() => Object.keys(formData).filter(k => !['id','created_at'].includes(k)), [formData]);
 
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        const { name, value } = e.target;
-        const type = 'type' in e.target ? e.target.type : 'text';
-        
-        if (type === 'checkbox') {
-            // Type assertion to access 'checked' property
-            setFormData({ ...formData, [name]: (e.target as HTMLInputElement).checked });
-        } else {
-            setFormData({ ...formData, [name]: value });
-        }
+      const { name, value, type, checked } = e.target as HTMLInputElement;
+      setFormData((prev: any) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
     };
 
     const handleDateChange = (name: string, date: dayjs.Dayjs | null) => {
-        setFormData({ ...formData, [name]: date ? date.format('YYYY-MM-DD') : null });
-    };
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const { files } = e.target;
-        if (files && files.length > 0) {
-            const file = files[0];
-            setFormData({ ...formData, file_name: file.name, file_path: URL.createObjectURL(file) });
-        }
+      setFormData((prev: any) => ({ ...prev, [name]: date ? date.format('YYYY-MM-DD') : null }));
     };
 
     const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        try { sessionStorage.removeItem(storageKey); } catch {}
-
-        // Sanitize values: allow blanks by converting ''/undefined to null, and parse numeric fields
-        const defs = getFieldsForView(activeView) as any;
-        const sanitized: any = {};
-        Object.keys(defs).forEach((k) => {
-          const raw = (formData as any)[k];
-          if (raw === '' || typeof raw === 'undefined') {
-            sanitized[k] = null;
-          } else if (typeof defs[k] === 'number') {
-            const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
-            sanitized[k] = Number.isFinite(n) ? n : null;
-          } else {
-            sanitized[k] = raw;
+      e.preventDefault();
+      try { sessionStorage.removeItem(storageKey); } catch {}
+      const viewForDefs = activeView === 'Client Insight' ? 'Clients' : activeView;
+      const defs: any = getFieldsForView(viewForDefs);
+      const payload: any = {};
+      formKeys.forEach(k => {
+        let val = formData[k];
+        if (val === '' || typeof val === 'undefined') val = null;
+        if (typeof defs[k] === 'number') {
+          if (val === null) payload[k] = null; else {
+            const n = typeof val === 'number' ? val : parseFloat(String(val));
+            payload[k] = Number.isFinite(n) ? n : null;
           }
-        });
-        if (modalMode === 'edit' && formData && 'id' in (formData as any)) {
-          sanitized.id = (formData as any).id;
-        }
-
-        if (modalMode === 'add') handleAddItem(sanitized);
-        else handleUpdateItem(sanitized);
+        } else payload[k] = val;
+      });
+      if (modalMode === 'edit' && 'id' in formData) payload.id = formData.id;
+      if (modalMode === 'add') handleAddItem(payload); else handleUpdateItem(payload);
     };
-    
+
+    const clientsForSelect = useMemo(() => [...clients].sort((a,b)=>a.first_name.localeCompare(b.first_name)), [clients]);
+    const bookingsForSelect = useMemo(() => formData.client_id ? bookings.filter(b => b.client_id === formData.client_id) : bookings, [bookings, formData.client_id]);
+
     return (
-        <Dialog open={openModal} onClose={handleCloseModal} maxWidth="sm" fullWidth keepMounted>
-          <DialogTitle>{modalMode === 'add' ? 'Add New' : 'Edit'} {activeView === 'Client Insight' ? 'Client' : activeView.slice(0, -1)}</DialogTitle>
-          <form onSubmit={handleSubmit}>
-              <LocalizationProvider dateAdapter={AdapterDayjs}>
-                  <DialogContent dividers>
-                      <Grid container spacing={2} sx={{pt: 1}}>
-                      {formKeys.map(key => (
-                          <Grid item xs={12} sm={key.includes('notes') || key.includes('special_requirement') ? 12 : 6} key={key}>
-                              {key.includes('client_id') ? (
-                                  <FormControl fullWidth>
-                                      <InputLabel id={`${key}-label`}>Client</InputLabel>
-                                      <Select
-                                          labelId={`${key}-label`}
-                                          id={key}
-                                          name="client_id"
-                                          value={formData[key] || ''}
-                                          label="Client"
-                                          onChange={(e) => handleFormChange(e as any)}
-                                      >
-                                          <MenuItem value=""><em>None</em></MenuItem>
-                                          {clients.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
-                                      </Select>
-                                  </FormControl>
-                              ) : key.includes('booking_id') && activeView === 'Policies' ? (
-                                  <FormControl fullWidth>
-                                      <InputLabel id={`${key}-label`}>Booking</InputLabel>
-                                      <Select
-                                          labelId={`${key}-label`}
-                                          id={key}
-                                          name="booking_id"
-                                          value={formData[key] || ''}
-                                          label="Booking"
-                                          onChange={(e) => handleFormChange(e as any)}
-                                      >
-                                          <MenuItem value=""><em>None</em></MenuItem>
-                                          {bookings.map(b => <MenuItem key={b.id} value={b.id}>{b.pnr || b.reference} ({clients.find(c => c.id === b.client_id)?.first_name || 'N/A'})</MenuItem>)}
-                                      </Select>
-                                  </FormControl>
-                              ) : key.includes('date') || key.includes('dob') || key.includes('check_in') || key.includes('check_out') || key.includes('start_date') || key.includes('end_date') ? (
-                                  <DatePicker
-                                      label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                      value={formData[key] ? dayjs(formData[key]) : null}
-                                      onChange={(date) => handleDateChange(key, date)}
-                                      slotProps={{ textField: { fullWidth: true } }}
-                                  />
-                              ) : key === 'status' ? (
-                                  <FormControl fullWidth>
-                                      <InputLabel id={`${key}-label`}>Status</InputLabel>
-                                      <Select
-                                          labelId={`${key}-label`}
-                                          id={key}
-                                          name="status"
-                                          value={formData[key] || ''}
-                                          label="Status"
-                                          onChange={(e) => handleFormChange(e as any)}
-                                      >
-                                          <MenuItem value="Confirmed">Confirmed</MenuItem>
-                                          <MenuItem value="Pending">Pending</MenuItem>
-                                          <MenuItem value="Cancelled">Cancelled</MenuItem>
-                                      </Select>
-                                  </FormControl>
-                              ) : key === 'vip_status' ? (
-                                  <FormControl fullWidth>
-                                      <label>
-                                          <input
-                                              type="checkbox"
-                                              name="vip_status"
-                                              checked={!!formData[key]}
-                                              onChange={handleFormChange}
-                                          /> VIP Status
-                                      </label>
-                                  </FormControl>
-                              ) : (
-                                  <TextField name={key} label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                      type={typeof (getFieldsForView(activeView) as any)[key] === 'number' ? 'number' : 'text'}
-                                      fullWidth value={formData[key] ?? ''} onChange={handleFormChange}
-                                      multiline={key.includes('notes') || key.includes('special_requirement')}
-                                      rows={key.includes('notes') || key.includes('special_requirement') ? 3 : 1}
-                                  />
-                              )}
-                          </Grid>
-                      ))}
-                      </Grid>
-                  </DialogContent>
-              </LocalizationProvider>
-              <DialogActions>
-                  <Button onClick={handleCloseModal}>Cancel</Button>
-                  <Button type="submit" variant="contained">{modalMode === 'add' ? 'Add' : 'Update'}</Button>
-              </DialogActions>
-          </form>
-        </Dialog>
-    )
+      <Dialog open={openModal} onClose={handleCloseModal} maxWidth="sm" fullWidth keepMounted>
+        <DialogTitle>{modalMode === 'add' ? 'Add New' : 'Edit'} {(activeView === 'Client Insight' ? 'Client' : activeView.slice(0, -1))}</DialogTitle>
+        <form onSubmit={handleSubmit}>
+          <LocalizationProvider dateAdapter={AdapterDayjs}>
+            <DialogContent dividers>
+              <Grid container spacing={2} sx={{ pt:1 }}>
+                {formKeys.map(key => {
+                  const label = key.replace(/_/g,' ').replace(/\b\w/g, l=>l.toUpperCase());
+                  const isLong = key.includes('notes') || key.includes('special_requirement');
+                  return (
+                    <Grid item xs={12} sm={isLong ? 12 : 6} key={key}>
+                      {key === 'client_id' && (
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Client</InputLabel>
+                          <Select name="client_id" label="Client" value={formData.client_id || ''} onChange={(e)=> setFormData((p:any)=>({...p, client_id: e.target.value, booking_id: ''}))}>
+                            <MenuItem value=""><em>None</em></MenuItem>
+                            {clientsForSelect.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
+                          </Select>
+                        </FormControl>
+                      )}
+                      {key === 'booking_id' && (activeView === 'Policies' || activeView === 'Client Insight' || activeView === 'Bookings') && (
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Booking</InputLabel>
+                          <Select name="booking_id" label="Booking" value={formData.booking_id || ''} onChange={(e)=> setFormData((p:any)=>({...p, booking_id: e.target.value}))}>
+                            <MenuItem value=""><em>None</em></MenuItem>
+                            {bookingsForSelect.map(b => <MenuItem key={b.id} value={b.id}>{b.pnr || b.reference || 'Booking'}</MenuItem>)}
+                          </Select>
+                        </FormControl>
+                      )}
+                      {(key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && !key.endsWith('_id') && (
+                        <DatePicker label={label} value={formData[key] ? dayjs(formData[key]) : null} onChange={(d)=>handleDateChange(key,d)} slotProps={{ textField: { fullWidth:true, size:'small' } }} />
+                      )}
+                      {key === 'status' && (
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Status</InputLabel>
+                          <Select name="status" label="Status" value={formData.status || ''} onChange={(e)=> setFormData((p:any)=>({...p, status: e.target.value}))}>
+                            <MenuItem value=""><em>None</em></MenuItem>
+                            <MenuItem value="Confirmed">Confirmed</MenuItem>
+                            <MenuItem value="Pending">Pending</MenuItem>
+                            <MenuItem value="Cancelled">Cancelled</MenuItem>
+                          </Select>
+                        </FormControl>
+                      )}
+                      {key === 'vip_status' && (
+                        <FormControlLabel control={<Checkbox checked={!!formData.vip_status} onChange={(e)=> setFormData((p:any)=>({...p, vip_status: e.target.checked}))} />} label="VIP Client" />
+                      )}
+                      {!(key === 'client_id' || key === 'booking_id' || key === 'status' || key === 'vip_status' || key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && (
+                        <TextField name={key} label={label} size="small" fullWidth value={formData[key] ?? ''} onChange={handleFormChange} multiline={isLong} rows={isLong ? 3 : 1} type={typeof (getFieldsForView(activeView === 'Client Insight' ? 'Clients' : activeView) as any)[key] === 'number' ? 'number' : 'text'} />
+                      )}
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            </DialogContent>
+          </LocalizationProvider>
+          <DialogActions>
+            <Button onClick={handleCloseModal}>Cancel</Button>
+            <Button type="submit" variant="contained">{modalMode === 'add' ? 'Add' : 'Update'}</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+    );
   }
 
   const ConfirmationDialog = () => (
@@ -1403,7 +1341,7 @@ export default function DashboardPage() {
 const InsightTable = ({ data, columns }: { data: any[], columns: { key: string, label: string, render?: (val: any) => React.ReactNode }[] }) => {
     if (!data || data.length === 0) {
         return <Typography sx={{textAlign: 'center', p: 2, color: 'text.secondary'}}>No data available.</Typography>;
-    }
+       }
     return (
         <TableContainer component={Paper} elevation={0} sx={{border: '1px solid #eee'}}>
             <Table size="small">
