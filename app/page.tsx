@@ -44,7 +44,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // --- TYPE DEFINITIONS ---
 interface BaseEntity { id: string; created_at: string; }
-export interface Client extends BaseEntity { first_name: string; middle_name?: string; last_name: string; email_id: string; mobile_no: string; dob: string; nationality: string; vip_status?: boolean; } // Added vip_status
+export interface Client extends BaseEntity { first_name: string; middle_name?: string; last_name: string; email_id: string; mobile_no: string; dob: string; nationality: string; } 
 export interface Booking extends BaseEntity { client_id: string; reference: string; vendor: string; destination: string; check_in: string; check_out: string; confirmation_no: string; seat_reference?: string; meal_preference?: string; special_requirement?: string; booking_type: string; pnr: string; departure_date?: string; amount?: number; status?: 'Confirmed' | 'Pending' | 'Cancelled'; } // Made optional fields truly optional
 export interface Visa extends BaseEntity { client_id: string; country: string; visa_type: string; visa_number: string; issue_date: string; expiry_date: string; notes: string; }
 export interface Passport extends BaseEntity { client_id: string; passport_number: string; issue_date: string; expiry_date: string; }
@@ -198,7 +198,6 @@ const TableView = React.memo(({
                     {key.includes('date') && item[key] ? dayjs(item[key]).format('YYYY-MM-DD') : 
                      key === 'client_id' ? (clients.find(c => c.id === item[key])?.first_name || 'N/A') :
                      key === 'booking_id' ? (bookings.find(b => b.id === item[key])?.pnr || 'N/A') :
-                     key === 'vip_status' ? (item[key] ? 'Yes' : 'No') :
                      item[key]}
                   </TableCell>
                 ))}
@@ -484,7 +483,7 @@ export default function DashboardPage() {
   // --- UI CONFIGURATION & FILTERING ---
   const getFieldsForView = (view: string) => {
     switch (view) {
-        case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: '', vip_status: false };
+        case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
         case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', departure_date: '', amount: 0, status: 'Confirmed' };
         case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', notes: '' };
         case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: ''};
@@ -677,12 +676,6 @@ export default function DashboardPage() {
         const recentBookers = new Set(bookingData.filter(b => dayjs(b.created_at).isAfter(oneYearAgo)).map(b => b.client_id));
         opportunities['Potential Re-engagement'] = [...clientsWithBookings].filter(id => !recentBookers.has(id));
 
-        // VIP Clients with no recent activity (last 6 months)
-        const sixMonthsAgo = today.subtract(6, 'months');
-        const vipClientIds = new Set(clientData.filter(c => c.vip_status).map(c => c.id));
-        const recentVipBookers = new Set(bookingData.filter(b => dayjs(b.created_at).isAfter(sixMonthsAgo) && vipClientIds.has(b.client_id)).map(b => b.client_id));
-        opportunities['Inactive VIPs'] = [...vipClientIds].filter(id => !recentVipBookers.has(id));
-        
         // Clients with expiring passports (next 6 months)
         const sixMonthsFromNow = today.add(6, 'months');
         const expiringPassportClientIds = new Set(passportData.filter(p => {
@@ -1058,10 +1051,7 @@ export default function DashboardPage() {
                           </Select>
                         </FormControl>
                       )}
-                      {key === 'vip_status' && (
-                        <FormControlLabel control={<Checkbox checked={!!formData.vip_status} onChange={(e)=> setFormData((p:any)=>({...p, vip_status: e.target.checked}))} />} label="VIP Client" />
-                      )}
-                      {!(key === 'client_id' || key === 'booking_id' || key === 'status' || key === 'vip_status' || key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && (
+                      {!(key === 'client_id' || key === 'booking_id' || key === 'status'|| key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && (
                         <TextField name={key} label={label} size="small" fullWidth value={formData[key] ?? ''} onChange={handleFormChange} multiline={isLong} rows={isLong ? 3 : 1} type={typeof (getFieldsForView(activeView === 'Client Insight' ? 'Clients' : activeView) as any)[key] === 'number' ? 'number' : 'text'} />
                       )}
                     </Grid>
@@ -1698,7 +1688,6 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                         <Box flexGrow={1}>
                                             <Typography variant="h4" component="div" sx={{fontWeight: 'bold', mb: 0.5}}>
                                                 {selectedClient?.first_name} {selectedClient?.middle_name ? `${selectedClient.middle_name} ` : ''}{selectedClient?.last_name}
-                                                {selectedClient?.vip_status && <Chip icon={<StarIcon />} label="VIP Client" color="secondary" size="medium" sx={{ ml: 2, verticalAlign: 'middle' }} />}
                                             </Typography>
                                             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="flex-start">
                                                 <Chip icon={<EmailIcon fontSize="small" />} label={selectedClient?.email_id ?? ''} size="small" />
@@ -1726,7 +1715,6 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                                       { label: 'DOB', value: dayjs(client.dob).isValid() ? dayjs(client.dob).format('YYYY-MM-DD') : 'N/A' },
                                                       { label: 'Age', value: age },
                                                       { label: 'Nationality', value: client.nationality },
-                                                      { label: 'VIP Status', value: client.vip_status ? 'Yes' : 'No' },
                                                       { label: 'Total Bookings', value: clientData.bookings.length },
                                                       { label: 'Total Visas', value: clientData.visas.length },
                                                       { label: 'Total Passports', value: clientData.passports.length },
