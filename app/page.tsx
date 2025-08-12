@@ -10,7 +10,8 @@ import {
   Select, MenuItem, FormControl, InputLabel, Stack, Link,
   Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar,
   Checkbox, FormControlLabel,
-  Collapse
+  Collapse,
+  Badge
 } from '@mui/material'
 import { Grid } from '@mui/material';
 import {
@@ -21,7 +22,7 @@ import {
   Logout as LogoutIcon, UploadFile as UploadFileIcon, Description as DescriptionIcon,
   ExpandMore as ExpandMoreIcon, AccountBox as AccountBoxIcon, Download as DownloadIcon, Share as ShareIcon,
   Analytics as AnalyticsIcon, Notes as NotesIcon, Star as StarIcon, Email as EmailIcon, Phone as PhoneIcon,
-  Visibility as VisibilityIcon, ExpandLess as ExpandLessIcon
+  Visibility as VisibilityIcon, ExpandLess as ExpandLessIcon, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon
 } from '@mui/icons-material'
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
@@ -257,7 +258,10 @@ export default function DashboardPage() {
   const [selectedClientForDocs, setSelectedClientForDocs] = useState<Client | null>(null);
   
   const [snackbar, setSnackbar] = useState<{open: boolean, message: string}>({open: false, message: ''});
-
+  // NEW: collapsible sidebars state
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [showReminders, setShowReminders] = useState(true);
+  const actualLeftWidth = leftCollapsed ? 64 : drawerWidth;
   // --- AUTHENTICATION ---
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -551,22 +555,27 @@ export default function DashboardPage() {
 
   const drawer = (
     <div>
-      <Toolbar sx={{ bgcolor: 'primary.main', color: 'white' }}><Typography variant="h6" noWrap>SWTravels</Typography></Toolbar>
+      <Toolbar sx={{ bgcolor: 'primary.main', color: 'white', justifyContent: leftCollapsed ? 'center' : 'space-between', px: 1 }}>
+        {!leftCollapsed && <Typography variant="h6" noWrap>SWTravels</Typography>}
+        <IconButton size="small" onClick={() => setLeftCollapsed(c=>!c)} sx={{ color: 'inherit' }} aria-label="toggle navigation width">
+          {leftCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+        </IconButton>
+      </Toolbar>
       <List sx={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column' }}>
         <Box>
             {menuItems.map(item => (
-                <ListItem key={item.text} disablePadding>
-                    <ListItemButton selected={activeView === item.view} onClick={() => { setActiveView(item.view); setMobileOpen(false); }}>
-                    <ListItemIcon>{item.icon}</ListItemIcon>
-                    <ListItemText primary={item.text} />
+                <ListItem key={item.text} disablePadding sx={{ display: 'block' }}>
+                    <ListItemButton selected={activeView === item.view} onClick={() => { setActiveView(item.view); setMobileOpen(false); }} sx={{ minHeight: 48, justifyContent: leftCollapsed ? 'center' : 'flex-start', px: 2 }}>
+                      <ListItemIcon sx={{ minWidth: 0, mr: leftCollapsed ? 0 : 2, justifyContent: 'center' }}>{item.icon}</ListItemIcon>
+                      {!leftCollapsed && <ListItemText primary={item.text} />}
                     </ListItemButton>
                 </ListItem>
             ))}
         </Box>
-        <ListItem disablePadding sx={{ mt: 'auto' }}>
-          <ListItemButton onClick={() => supabase.auth.signOut()}>
-            <ListItemIcon><LogoutIcon /></ListItemIcon>
-            <ListItemText primary="Logout" />
+        <ListItem disablePadding sx={{ mt: 'auto', display: 'block' }}>
+          <ListItemButton onClick={() => supabase.auth.signOut()} sx={{ minHeight: 48, justifyContent: leftCollapsed ? 'center' : 'flex-start', px: 2 }}>
+            <ListItemIcon sx={{ minWidth: 0, mr: leftCollapsed ? 0 : 2, justifyContent: 'center' }}><LogoutIcon /></ListItemIcon>
+            {!leftCollapsed && <ListItemText primary="Logout" />}
           </ListItemButton>
         </ListItem>
       </List>
@@ -1241,47 +1250,42 @@ export default function DashboardPage() {
     }, [reminders]);
 
     return (
-        <Drawer
-            variant="permanent"
-            anchor="right"
-            sx={{
-                width: rightDrawerWidth,
-                flexShrink: 0,
-                [`& .MuiDrawer-paper`]: { width: rightDrawerWidth, boxSizing: 'border-box', pt: '64px', overflowY: 'auto', borderLeft: '1px solid rgba(0, 0, 0, 0.12)' },
-                display: { xs: 'none', md: 'block' }
-            }}
-        >
-            <Toolbar />
-            <Box sx={{ p: 2 }}>
-                <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>Reminders</Typography>
-                {Object.keys(categorizedReminders).length > 0 ? (
-                    Object.entries(categorizedReminders).map(([category, items]) => (
-                        <Accordion key={category} defaultExpanded={true} elevation={1} sx={{ mb: 1 }}>
-                            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                                    {category} ({items.length})
-                                </Typography>
-                            </AccordionSummary>
-                            <AccordionDetails sx={{ p: 1 }}>
-                                {items.map((r, i) => (
-                                    <Alert 
-                                        key={i} 
-                                        severity={r.days_left! <= 7 && r.days_left! >= 0 ? "error" : r.days_left! < 0 ? "error" : "warning"} 
-                                        icon={getReminderIcon(r.type)} 
-                                        sx={{ mb: 1, cursor: 'pointer', '&:last-child': { mb: 0 }, alignItems: 'center' }} 
-                                        onClick={() => onReminderClick(r)}
-                                    >
-                                        {getReminderMessage(r)}
-                                    </Alert>
-                                ))}
-                            </AccordionDetails>
-                        </Accordion>
-                    ))
-                ) : (
-                    <Alert severity="success" sx={{mt: 2}}>No upcoming reminders!</Alert>
-                )}
-            </Box>
-        </Drawer>
+      <Drawer
+        variant="permanent"
+        anchor="right"
+        sx={{
+          width: rightDrawerWidth,
+          flexShrink: 0,
+          [`& .MuiDrawer-paper`]: { width: rightDrawerWidth, boxSizing: 'border-box', pt: '64px', overflowY: 'auto', borderLeft: '1px solid rgba(0,0,0,0.12)' },
+          display: { xs: 'none', md: 'block' }
+        }}
+      >
+        <Toolbar sx={{ position: 'absolute', top: 0, right: 0 }} />
+        <Box sx={{ p: 2 }}>
+          <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+            <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Reminders</Typography>
+            <NotificationsIcon color="primary" />
+          </Box>
+          {Object.keys(categorizedReminders).length > 0 ? (
+            Object.entries(categorizedReminders).map(([category, items]) => (
+              <Accordion key={category} defaultExpanded={true} elevation={1} sx={{ mb: 1 }}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}> 
+                  <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>{category} ({items.length})</Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ p: 1 }}>
+                  {items.map((r, i) => (
+                    <Alert key={i} severity={r.days_left! <= 7 && r.days_left! >= 0 ? "error" : r.days_left! < 0 ? "error" : "warning"} icon={getReminderIcon(r.type)} sx={{ mb: 1, cursor: 'pointer', '&:last-child': { mb: 0 } }} onClick={() => onReminderClick(r)}>
+                      {getReminderMessage(r)}
+                    </Alert>
+                  ))}
+                </AccordionDetails>
+              </Accordion>
+            ))
+          ) : (
+            <Alert severity="success" sx={{mt: 2}}>No upcoming reminders!</Alert>
+          )}
+        </Box>
+      </Drawer>
     );
   };
 
@@ -1294,19 +1298,32 @@ export default function DashboardPage() {
   return (
     <Box sx={{ display: 'flex' }}>
       <CssBaseline />
-      <AppBar position="fixed" 
-        sx={{ 
-            zIndex: (theme) => theme.zIndex.drawer + 1,
+      <AppBar position="fixed"
+        sx={{
+          zIndex: (theme) => theme.zIndex.drawer + 1,
+          transition: (theme) => theme.transitions.create(['width','margin'], { duration: theme.transitions.duration.shortest })
         }}>
         <Toolbar>
           <IconButton color="inherit" edge="start" onClick={handleDrawerToggle} sx={{ mr: 2, display: { sm: 'none' } }}><MenuIcon /></IconButton>
           <Typography variant="h6" noWrap component="div" sx={{flexGrow: 1}}>{activeView}</Typography>
+          <Tooltip title={showReminders ? 'Hide Reminders' : 'Show Reminders'}>
+            <IconButton color="inherit" onClick={() => setShowReminders(o=>!o)}>
+              <Badge badgeContent={reminders.length} color="error">
+                <NotificationsIcon />
+              </Badge>
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </AppBar>
-      <Box component="nav" sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}>
+      <Box component="nav" sx={{ width: { sm: actualLeftWidth }, flexShrink: { sm: 0 } }}>
+        {/* Mobile drawer */}
         <Drawer variant="temporary" open={mobileOpen} onClose={handleDrawerToggle} ModalProps={{ keepMounted: true }}
           sx={{ display: { xs: 'block', sm: 'none' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth } }}>{drawer}</Drawer>
-        <Drawer variant="permanent" sx={{ display: { xs: 'none', sm: 'block' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth, borderRight: '1px solid rgba(0, 0, 0, 0.12)' } }} open>{drawer}</Drawer>
+        {/* Desktop collapsible drawer */}
+        <Drawer variant="permanent" open
+          sx={{ display: { xs: 'none', sm: 'block' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: actualLeftWidth, borderRight: '1px solid rgba(0,0,0,0.12)', overflowX: 'hidden', transition: (theme)=>theme.transitions.create('width',{ duration: theme.transitions.duration.shortest }) } }}>
+            {drawer}
+        </Drawer>
       </Box>
       <Box component="main" 
         sx={{ 
@@ -1321,10 +1338,7 @@ export default function DashboardPage() {
           {renderContent()}
         </Container>
       </Box>
-
-      {/* Right Reminders Drawer */}
-      <RightDrawer reminders={reminders} onReminderClick={handleReminderClick} />
-
+      {showReminders && <RightDrawer reminders={reminders} onReminderClick={handleReminderClick} />}
       {openModal && <FormModal />}
       {docModalOpen && <DocumentUploadModal onShowSnackbar={setSnackbar} />}
       <ConfirmationDialog />
