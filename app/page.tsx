@@ -408,7 +408,7 @@ export default function DashboardPage() {
         }
     });
 
-    const checkExpiry = (items: (Passport[] | Visa[] | Policy[]), type: string, threshold: number) => {
+        const checkExpiry = (items: (Passport[] | Visa[] | Policy[]), type: string, threshold: number) => {
         items.forEach((item: any) => {
             const expiryDateField = item.expiry_date || item.end_date;
             if (!expiryDateField) return;
@@ -417,7 +417,16 @@ export default function DashboardPage() {
             if (!expiryDate.isValid()) return;
             const daysLeft = expiryDate.diff(today, 'day');
             if (daysLeft >= 0 && daysLeft <= threshold) { 
-                 allReminders.push({ type, id: item.id, client_id: item.client_id, name: getClientName(item.client_id), expiry_date: expiryDate.format('YYYY-MM-DD'), days_left: daysLeft });
+                                 allReminders.push({ 
+                                     type, 
+                                     id: item.id, 
+                                     client_id: item.client_id, 
+                                     name: getClientName(item.client_id), 
+                                     expiry_date: expiryDate.format('YYYY-MM-DD'), 
+                                     days_left: daysLeft,
+                                     // Add visa country so UI can show it
+                                     ...(type === 'Visa' && item.country ? { country: item.country } : {})
+                                 });
             }
         });
     };
@@ -1410,8 +1419,11 @@ export default function DashboardPage() {
     const getReminderIcon = (type: string) => ({ Birthday: <CakeIcon color="secondary" />, Passport: <CreditCardIcon color="error" />, Visa: <VpnKeyIcon color="error" />, Policy: <PolicyIcon color="error" />, Booking: <FlightIcon color="info" /> }[type] || <NotificationsIcon />);
     const getReminderMessage = (r: Reminder) => {
         let message = `${r.type} for ${r.name}`;
-        if (r.type.includes('Passport') || r.type.includes('Visa') || r.type.includes('Policy')) {
-            message += ` expiring on ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}`;
+                if (r.type.includes('Passport') || r.type.includes('Visa') || r.type.includes('Policy')) {
+                        message += ` expiring on ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}`;
+                        if (r.type === 'Visa' && (r as any).country) {
+                            message += ` • Country: ${(r as any).country}`;
+                        }
         } else if (r.type === 'Booking') {
             message += ` check-in on ${dayjs(r.departure_date).format('YYYY-MM-DD')}`;
         } else if (r.type === 'Birthday') {
@@ -1990,7 +2002,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                                             secondary={
                                                                 <>
                                                                     {r.type.includes('Passport') || r.type.includes('Visa') || r.type.includes('Policy') ? 
-                                                                        `Expires: ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}` : ''}
+                                                                        `Expires: ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}${r.type === 'Visa' && (r as any).country ? ` • Country: ${(r as any).country}` : ''}` : ''}
                                                                     {r.type === 'Booking' ? `Departure: ${dayjs(r.departure_date).format('YYYY-MM-DD')}` : ''}
                                                                     {r.type === 'Birthday' ? `Birthday: ${dayjs(r.dob).format('MM-DD')}` : ''}
                                                                     {r.days_left !== undefined && r.days_left >= 0 && 
