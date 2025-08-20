@@ -11,7 +11,8 @@ import {
   Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar,
   Checkbox, FormControlLabel,
   Collapse,
-  Badge
+    Badge,
+    Autocomplete
 } from '@mui/material'
 import { Grid } from '@mui/material';
 import {
@@ -44,8 +45,15 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // --- TYPE DEFINITIONS ---
 interface BaseEntity { id: string; created_at: string; }
+// Trip segment for multi-city bookings
+export interface TripSegment {
+    origin: string;
+    destination: string;
+    departure_date: string; // YYYY-MM-DD
+    airline?: string;
+}
 export interface Client extends BaseEntity { first_name: string; middle_name?: string; last_name: string; email_id: string; mobile_no: string; dob: string; nationality: string; } 
-export interface Booking extends BaseEntity { client_id: string; reference: string; vendor: string; destination: string; check_in: string; check_out: string; confirmation_no: string; seat_reference?: string; meal_preference?: string; special_requirement?: string; booking_type: string; pnr: string; departure_date?: string; amount?: number; status?: 'Confirmed' | 'Pending' | 'Cancelled'; } // Made optional fields truly optional
+export interface Booking extends BaseEntity { client_id: string; reference: string; vendor: string; destination: string; check_in: string; check_out: string; confirmation_no: string; seat_reference?: string; meal_preference?: string; special_requirement?: string; booking_type: string; pnr: string; departure_date?: string; amount?: number; status?: 'Confirmed' | 'Pending' | 'Cancelled'; segments?: TripSegment[] } // Made optional fields truly optional
 export interface Visa extends BaseEntity { client_id: string; country: string; visa_type: string; visa_number: string; issue_date: string; expiry_date: string; notes: string; }
 export interface Passport extends BaseEntity { client_id: string; passport_number: string; issue_date: string; expiry_date: string; }
 export interface Policy extends BaseEntity { client_id: string; booking_id: string; policy_number: string; insurer: string; sum_insured: number; start_date: string; end_date: string; premium_amount: number; }
@@ -193,14 +201,40 @@ const TableView = React.memo(({
           <TableBody>
             {data.map(item => (
               <TableRow hover key={item.id}>
-                {Object.keys(getFieldsForView(view)).map(key => (
-                  <TableCell key={key}>
-                    {key.includes('date') && item[key] ? dayjs(item[key]).format('YYYY-MM-DD') : 
-                     key === 'client_id' ? (clients.find(c => c.id === item[key])?.first_name || 'N/A') :
-                     key === 'booking_id' ? (bookings.find(b => b.id === item[key])?.pnr || 'N/A') :
-                     item[key]}
-                  </TableCell>
-                ))}
+                                {Object.keys(getFieldsForView(view)).map(key => {
+                                    const val = (item as any)[key];
+                                    let content: React.ReactNode = null;
+
+                                    if (key.includes('date') && val) {
+                                        content = dayjs(val).format('YYYY-MM-DD');
+                                    } else if (key === 'client_id') {
+                                        content = clients.find(c => c.id === val)?.first_name || 'N/A';
+                                    } else if (key === 'booking_id') {
+                                        content = bookings.find(b => b.id === val)?.pnr || 'N/A';
+                                    } else if (view === 'Bookings' && key === 'segments') {
+                                        const segs = Array.isArray(val) ? val : [];
+                                        if (segs.length === 0) content = '—';
+                                        else {
+                                            const origin = segs[0]?.origin || '';
+                                            const dest = segs[segs.length - 1]?.destination || '';
+                                            content = (
+                                                <Stack direction="row" spacing={1} alignItems="center">
+                                                    <Chip size="small" label={`${segs.length} leg${segs.length > 1 ? 's' : ''}`} />
+                                                    <Typography variant="body2">{origin && dest ? `${origin} → ${dest}` : ''}</Typography>
+                                                </Stack>
+                                            );
+                                        }
+                                    } else if (val !== null && typeof val === 'object') {
+                                        // Fallback: avoid rendering objects; show a summary string
+                                        content = Array.isArray(val) ? (val.length ? `${val.length} items` : '—') : '—';
+                                    } else {
+                                        content = val ?? '—';
+                                    }
+
+                                    return (
+                                        <TableCell key={key}>{content}</TableCell>
+                                    );
+                                })}
                 <TableCell>
                   <Tooltip title="Edit"><IconButton size="small" onClick={() => onOpenModal('edit', item)}><EditIcon color="info" /></IconButton></Tooltip>
                   <Tooltip title="Delete"><IconButton size="small" onClick={() => onDeleteItem(item.id, view)}><DeleteIcon color="error" /></IconButton></Tooltip>
@@ -484,7 +518,7 @@ export default function DashboardPage() {
   const getFieldsForView = (view: string) => {
     switch (view) {
         case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
-        case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', departure_date: '', amount: 0, status: 'Confirmed' };
+    case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', departure_date: '', amount: 0, status: 'Confirmed', segments: [] };
         case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', notes: '' };
         case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: ''};
         case 'Policies': return { client_id: '', booking_id: '', policy_number: '', insurer: '', sum_insured: 0, start_date: '', end_date: '', premium_amount: 0 };
@@ -502,7 +536,22 @@ export default function DashboardPage() {
     setFilters(prev => ({ ...prev, [column]: value }));
   };
   
-  const filteredData = useMemo(() => {
+    const filteredData = useMemo(() => {
+        const includesText = (val: any, term: string): boolean => {
+            if (val == null) return false;
+            const t = term.toLowerCase();
+            const type = typeof val;
+            if (type === 'string' || type === 'number' || type === 'boolean') {
+                return String(val).toLowerCase().includes(t);
+            }
+            if (Array.isArray(val)) {
+                return val.some(v => includesText(v, t));
+            }
+            if (type === 'object') {
+                return Object.values(val).some(v => includesText(v, t));
+            }
+            return false;
+        };
     let data: (Client | Booking | Visa | Passport | Policy)[] = [];
     switch (activeView) {
         case 'Clients': data = clients; break;
@@ -514,12 +563,24 @@ export default function DashboardPage() {
 
     let filtered = data;
 
-    if (debouncedSearchTerm) {
-        const lowercasedFilter = debouncedSearchTerm.toLowerCase();
-        filtered = filtered.filter(item =>
-            Object.values(item).some(val => String(val).toLowerCase().includes(lowercasedFilter))
-        );
-    }
+        if (debouncedSearchTerm) {
+                const lowercasedFilter = debouncedSearchTerm.toLowerCase();
+                const matchesLinked = (item: any, term: string) => {
+                    // Augment search by looking up related client fields when only client_id is stored
+                    let extra = '';
+                    if (activeView === 'Bookings' || activeView === 'Visas' || activeView === 'Passports' || activeView === 'Policies') {
+                        const client = clients.find(c => c.id === item.client_id);
+                        if (client) {
+                            extra = [client.first_name, client.last_name, client.email_id, client.mobile_no, client.nationality]
+                                .filter(Boolean)
+                                .join(' ')
+                                .toLowerCase();
+                        }
+                    }
+                    return extra ? extra.includes(term) : false;
+                };
+                filtered = filtered.filter(item => includesText(item, lowercasedFilter) || matchesLinked(item, lowercasedFilter));
+        }
 
     filtered = filtered.filter(item => Object.entries(filters).every(([key, val]) => !val || String((item as any)[key]).toLowerCase().includes(val.toLowerCase())));
 
@@ -939,6 +1000,9 @@ export default function DashboardPage() {
   
   const FormModal = () => {
     const [formData, setFormData] = useState<any>({});
+    const [airportQuery, setAirportQuery] = useState('');
+    const [airportOptions, setAirportOptions] = useState<Array<{ code: string; name: string; city?: string; country?: string; type: string }>>([]);
+    const airportAbortRef = useRef<AbortController | null>(null);
     const [initialized, setInitialized] = useState(false);
     const storageKey = useMemo(() => `form_${activeView}`, [activeView]);
 
@@ -966,10 +1030,28 @@ export default function DashboardPage() {
       setInitialized(true);
     }, [openModal, modalMode, selectedItem, activeView, storageKey]);
 
-    useEffect(() => {
+        useEffect(() => {
       if (!openModal || !initialized) return;
       try { sessionStorage.setItem(storageKey, JSON.stringify(formData)); } catch {}
     }, [formData, openModal, storageKey, initialized]);
+
+        // Debounced airport search
+        useEffect(() => {
+            const term = airportQuery.trim();
+            if (!term || term.length < 2) { setAirportOptions([]); return; }
+            const id = setTimeout(async () => {
+                try {
+                    airportAbortRef.current?.abort();
+                    const ctrl = new AbortController();
+                    airportAbortRef.current = ctrl;
+                    const res = await fetch(`/api/airports?q=${encodeURIComponent(term)}`, { signal: ctrl.signal, cache: 'no-store' });
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    setAirportOptions(Array.isArray(data) ? data : []);
+                } catch {}
+            }, 250);
+            return () => clearTimeout(id);
+        }, [airportQuery]);
 
     useEffect(() => () => { try { sessionStorage.removeItem(storageKey); } catch {} }, [storageKey]);
 
@@ -988,18 +1070,21 @@ export default function DashboardPage() {
       e.preventDefault();
       try { sessionStorage.removeItem(storageKey); } catch {}
       const viewForDefs = activeView === 'Client Insight' ? 'Clients' : activeView;
-      const defs: any = getFieldsForView(viewForDefs);
-      const payload: any = {};
-      formKeys.forEach(k => {
-        let val = formData[k];
-        if (val === '' || typeof val === 'undefined') val = null;
-        if (typeof defs[k] === 'number') {
-          if (val === null) payload[k] = null; else {
-            const n = typeof val === 'number' ? val : parseFloat(String(val));
-            payload[k] = Number.isFinite(n) ? n : null;
-          }
-        } else payload[k] = val;
-      });
+            const defs: any = getFieldsForView(viewForDefs);
+            const payload: any = {};
+            // Only include keys that exist in schema defaults for this view
+            Object.keys(defs).forEach(k => {
+                let val = formData[k];
+                if (val === '' || typeof val === 'undefined') val = null;
+                if (typeof defs[k] === 'number') {
+                    if (val === null) payload[k] = null; else {
+                        const n = typeof val === 'number' ? val : parseFloat(String(val));
+                        payload[k] = Number.isFinite(n) ? n : null;
+                    }
+                } else {
+                    payload[k] = val;
+                }
+            });
       if (modalMode === 'edit' && 'id' in formData) payload.id = formData.id;
       if (modalMode === 'add') handleAddItem(payload); else handleUpdateItem(payload);
     };
@@ -1007,18 +1092,124 @@ export default function DashboardPage() {
     const clientsForSelect = useMemo(() => [...clients].sort((a,b)=>a.first_name.localeCompare(b.first_name)), [clients]);
     const bookingsForSelect = useMemo(() => formData.client_id ? bookings.filter(b => b.client_id === formData.client_id) : bookings, [bookings, formData.client_id]);
 
-    return (
-      <Dialog open={openModal} onClose={handleCloseModal} maxWidth="sm" fullWidth keepMounted>
+        return (
+            <Dialog open={openModal} onClose={handleCloseModal} maxWidth={activeView === 'Bookings' ? 'md' : 'sm'} fullWidth keepMounted>
         <DialogTitle>{modalMode === 'add' ? 'Add New' : 'Edit'} {(activeView === 'Client Insight' ? 'Client' : activeView.slice(0, -1))}</DialogTitle>
         <form onSubmit={handleSubmit}>
           <LocalizationProvider dateAdapter={AdapterDayjs}>
             <DialogContent dividers>
-              <Grid container spacing={2} sx={{ pt:1 }}>
-                {formKeys.map(key => {
-                  const label = key.replace(/_/g,' ').replace(/\b\w/g, l=>l.toUpperCase());
-                  const isLong = key.includes('notes') || key.includes('special_requirement');
-                  return (
-                    <Grid item xs={12} sm={isLong ? 12 : 6} key={key}>
+                            <Grid container spacing={2} sx={{ pt:1 }}>
+                                {formKeys.map(key => {
+                                    const label = key.replace(/_/g,' ').replace(/\b\w/g, l=>l.toUpperCase());
+                                    const isLong = key.includes('notes') || key.includes('special_requirement');
+                                    const gridCols = key === 'segments' ? 12 : (isLong ? 12 : 6);
+                                    return (
+                                        <Grid item xs={12} sm={gridCols} key={key}>
+                                            {/* Multi-city segments editor for Bookings */}
+                                                                    {key === 'segments' && activeView === 'Bookings' && (
+                                                                        <Box sx={{ p: 2, border: '1px dashed', borderColor: 'divider', borderRadius: 2, bgcolor: 'background.default' }}>
+                                                                            <Stack spacing={1}>
+                                                                                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                                                                                    <Box>
+                                                                                        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Trip Segments</Typography>
+                                                                                        <Typography variant="body2" color="text.secondary">Add each leg of the journey (IATA codes suggested)</Typography>
+                                                                                    </Box>
+                                                                                    <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={() => {
+                                                                                        const next = Array.isArray(formData.segments) ? [...formData.segments] : [];
+                                                                                        next.push({ origin: '', destination: '', departure_date: '', airline: '' });
+                                                                                        setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                    }}>Add Segment</Button>
+                                                                                </Stack>
+
+                                                                                {(() => {
+                                                                                    const airports = [
+                                                                                        { code: 'BOM', name: 'Mumbai' },
+                                                                                        { code: 'DEL', name: 'Delhi' },
+                                                                                        { code: 'BLR', name: 'Bengaluru' },
+                                                                                        { code: 'HYD', name: 'Hyderabad' },
+                                                                                        { code: 'MAA', name: 'Chennai' },
+                                                                                        { code: 'PNQ', name: 'Pune' },
+                                                                                        { code: 'GOI', name: 'Goa' },
+                                                                                        { code: 'DXB', name: 'Dubai' },
+                                                                                        { code: 'LHR', name: 'London Heathrow' },
+                                                                                        { code: 'JFK', name: 'New York JFK' },
+                                                                                    ];
+                                                                                    const opt = (code?: string) => airports.find(a => a.code === (code || '').toUpperCase()) || null;
+                                                                                    return (
+                                                                                        <Stack spacing={1.5}>
+                                                                                            {(Array.isArray(formData.segments) ? formData.segments : []).map((seg: TripSegment, idx: number) => (
+                                                                                                <Paper key={idx} elevation={0} sx={{ p: 2, borderRadius: 2, border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
+                                                                                                    <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1}>
+                                                                                                        <Chip size="small" label={`Segment ${idx + 1}`} />
+                                                                                                        <Tooltip title="Delete Segment">
+                                                                                                            <IconButton color="error" onClick={() => {
+                                                                                                                const next = [...(formData.segments || [])];
+                                                                                                                next.splice(idx, 1);
+                                                                                                                setFormData((p:any) => ({ ...p, segments: next }));
+                                                                                                            }}>
+                                                                                                                <DeleteIcon />
+                                                                                                            </IconButton>
+                                                                                                        </Tooltip>
+                                                                                                    </Stack>
+                                                                                                    <Grid container spacing={2}>
+                                                                                                                                                <Grid item xs={12} md={3}>
+                                                                                                                                                    <Autocomplete size="small"
+                                                                                                                                                        options={airportOptions}
+                                                                                                                                                        filterOptions={(x)=>x} // server-side filtering
+                                                                                                                                                        getOptionLabel={(o:any)=>`${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}`}
+                                                                                                                                                        value={airportOptions.find(a=>a.code===seg.origin) || null}
+                                                                                                                                                        onChange={(e,_val:any)=>{
+                                                                                                                                                            const next = [...(formData.segments||[])];
+                                                                                                                                                            next[idx] = { ...next[idx], origin: _val?.code || '' };
+                                                                                                                                                            setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                                                        }}
+                                                                                                                                                        onInputChange={(e, val)=> setAirportQuery(val)}
+                                                                                                                                                        renderInput={(params)=> <TextField {...params} label="Origin" fullWidth placeholder="Type city or airport" />}
+                                                                                                                                                    />
+                                                                                                                                                </Grid>
+                                                                                                                                                <Grid item xs={12} md={3}>
+                                                                                                                                                    <Autocomplete size="small"
+                                                                                                                                                        options={airportOptions}
+                                                                                                                                                        filterOptions={(x)=>x}
+                                                                                                                                                        getOptionLabel={(o:any)=>`${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}`}
+                                                                                                                                                        value={airportOptions.find(a=>a.code===seg.destination) || null}
+                                                                                                                                                        onChange={(e,_val:any)=>{
+                                                                                                                                                            const next = [...(formData.segments||[])];
+                                                                                                                                                            next[idx] = { ...next[idx], destination: _val?.code || '' };
+                                                                                                                                                            setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                                                        }}
+                                                                                                                                                        onInputChange={(e, val)=> setAirportQuery(val)}
+                                                                                                                                                        renderInput={(params)=> <TextField {...params} label="Destination" fullWidth placeholder="Type city or airport" />}
+                                                                                                                                                    />
+                                                                                                                                                </Grid>
+                                                                                                        <Grid item xs={12} md={3}>
+                                                                                                            <DatePicker label="Departure Date" value={seg.departure_date ? dayjs(seg.departure_date) : null}
+                                                                                                                onChange={(d)=>{
+                                                                                                                    const next = [...(formData.segments||[])];
+                                                                                                                    next[idx] = { ...next[idx], departure_date: d ? d.format('YYYY-MM-DD') : '' };
+                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                }}
+                                                                                                                slotProps={{ textField: { size:'small', fullWidth: true } }}
+                                                                                                            />
+                                                                                                        </Grid>
+                                                                                                        <Grid item xs={12} md={3}>
+                                                                                                            <TextField size="small" fullWidth label="Airline" value={seg.airline || ''}
+                                                                                                                onChange={(e)=>{
+                                                                                                                    const next = [...(formData.segments||[])];
+                                                                                                                    next[idx] = { ...next[idx], airline: e.target.value };
+                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                }}
+                                                                                                            />
+                                                                                                        </Grid>
+                                                                                                    </Grid>
+                                                                                                </Paper>
+                                                                                            ))}
+                                                                                        </Stack>
+                                                                                    );
+                                                                                })()}
+                                                                            </Stack>
+                                                                        </Box>
+                                                                    )}
                       {key === 'client_id' && (
                         <FormControl fullWidth size="small">
                           <InputLabel>Client</InputLabel>
@@ -1028,7 +1219,7 @@ export default function DashboardPage() {
                           </Select>
                         </FormControl>
                       )}
-                      {key === 'booking_id' && (activeView === 'Policies' || activeView === 'Client Insight' || activeView === 'Bookings') && (
+                      {key === 'booking_id' && (activeView === 'Policies' || activeView === 'Client Insight') && (
                         <FormControl fullWidth size="small">
                           <InputLabel>Booking</InputLabel>
                           <Select name="booking_id" label="Booking" value={formData.booking_id || ''} onChange={(e)=> setFormData((p:any)=>({...p, booking_id: e.target.value}))}>
@@ -1051,7 +1242,7 @@ export default function DashboardPage() {
                           </Select>
                         </FormControl>
                       )}
-                      {!(key === 'client_id' || key === 'booking_id' || key === 'status'|| key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && (
+                      {!(key === 'client_id' || key === 'booking_id' || key === 'status' || key === 'segments' || key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && (
                         <TextField name={key} label={label} size="small" fullWidth value={formData[key] ?? ''} onChange={handleFormChange} multiline={isLong} rows={isLong ? 3 : 1} type={typeof (getFieldsForView(activeView === 'Client Insight' ? 'Clients' : activeView) as any)[key] === 'number' ? 'number' : 'text'} />
                       )}
                     </Grid>
