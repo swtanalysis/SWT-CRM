@@ -518,7 +518,7 @@ export default function DashboardPage() {
   const getFieldsForView = (view: string) => {
     switch (view) {
         case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
-    case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', departure_date: '', amount: 0, status: 'Confirmed', segments: [] };
+    case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', amount: 0, status: 'Confirmed', segments: [] };
         case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', notes: '' };
         case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: ''};
         case 'Policies': return { client_id: '', booking_id: '', policy_number: '', insurer: '', sum_insured: 0, start_date: '', end_date: '', premium_amount: 0 };
@@ -1152,36 +1152,38 @@ export default function DashboardPage() {
                                                                                                         </Tooltip>
                                                                                                     </Stack>
                                                                                                     <Grid container spacing={2}>
-                                                                                                                                                <Grid item xs={12} md={3}>
-                                                                                                                                                    <Autocomplete size="small"
-                                                                                                                                                        options={airportOptions}
-                                                                                                                                                        filterOptions={(x)=>x} // server-side filtering
-                                                                                                                                                        getOptionLabel={(o:any)=>`${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}`}
-                                                                                                                                                        value={airportOptions.find(a=>a.code===seg.origin) || null}
-                                                                                                                                                        onChange={(e,_val:any)=>{
-                                                                                                                                                            const next = [...(formData.segments||[])];
-                                                                                                                                                            next[idx] = { ...next[idx], origin: _val?.code || '' };
-                                                                                                                                                            setFormData((p:any)=>({ ...p, segments: next }));
-                                                                                                                                                        }}
-                                                                                                                                                        onInputChange={(e, val)=> setAirportQuery(val)}
-                                                                                                                                                        renderInput={(params)=> <TextField {...params} label="Origin" fullWidth placeholder="Type city or airport" />}
-                                                                                                                                                    />
-                                                                                                                                                </Grid>
-                                                                                                                                                <Grid item xs={12} md={3}>
-                                                                                                                                                    <Autocomplete size="small"
-                                                                                                                                                        options={airportOptions}
-                                                                                                                                                        filterOptions={(x)=>x}
-                                                                                                                                                        getOptionLabel={(o:any)=>`${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}`}
-                                                                                                                                                        value={airportOptions.find(a=>a.code===seg.destination) || null}
-                                                                                                                                                        onChange={(e,_val:any)=>{
-                                                                                                                                                            const next = [...(formData.segments||[])];
-                                                                                                                                                            next[idx] = { ...next[idx], destination: _val?.code || '' };
-                                                                                                                                                            setFormData((p:any)=>({ ...p, segments: next }));
-                                                                                                                                                        }}
-                                                                                                                                                        onInputChange={(e, val)=> setAirportQuery(val)}
-                                                                                                                                                        renderInput={(params)=> <TextField {...params} label="Destination" fullWidth placeholder="Type city or airport" />}
-                                                                                                                                                    />
-                                                                                                                                                </Grid>
+                                                                                                                                                                                        <Grid item xs={12} md={3}>
+                                                                                                                                                                                            <Autocomplete size="small"
+                                                                                                                                                                                                freeSolo
+                                                                                                                                                                                                options={airportOptions.map(o => `${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}${o.country ? `, ${o.country}` : ''}`)}
+                                                                                                                                                                                                filterOptions={(x)=>x}
+                                                                                                                                                                                                value={seg.origin || ''}
+                                                                                                                                                                                                onChange={(e, val)=>{
+                                                                                                                                                                                                    const code = typeof val === 'string' ? val.trim().slice(0,3).toUpperCase() : '';
+                                                                                                                                                                                                    const next = [...(formData.segments||[])];
+                                                                                                                                                                                                    next[idx] = { ...next[idx], origin: code };
+                                                                                                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                                                                                                }}
+                                                                                                                                                                                                onInputChange={(e, val)=> setAirportQuery(val)}
+                                                                                                                                                                                                renderInput={(params)=> <TextField {...params} label="Origin (IATA)" fullWidth placeholder="Type city or airport" />}
+                                                                                                                                                                                            />
+                                                                                                                                                                                        </Grid>
+                                                                                                                                                                                        <Grid item xs={12} md={3}>
+                                                                                                                                                                                            <Autocomplete size="small"
+                                                                                                                                                                                                freeSolo
+                                                                                                                                                                                                options={airportOptions.map(o => `${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}${o.country ? `, ${o.country}` : ''}`)}
+                                                                                                                                                                                                filterOptions={(x)=>x}
+                                                                                                                                                                                                value={seg.destination || ''}
+                                                                                                                                                                                                onChange={(e, val)=>{
+                                                                                                                                                                                                    const code = typeof val === 'string' ? val.trim().slice(0,3).toUpperCase() : '';
+                                                                                                                                                                                                    const next = [...(formData.segments||[])];
+                                                                                                                                                                                                    next[idx] = { ...next[idx], destination: code };
+                                                                                                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                                                                                                }}
+                                                                                                                                                                                                onInputChange={(e, val)=> setAirportQuery(val)}
+                                                                                                                                                                                                renderInput={(params)=> <TextField {...params} label="Destination (IATA)" fullWidth placeholder="Type city or airport" />}
+                                                                                                                                                                                            />
+                                                                                                                                                                                        </Grid>
                                                                                                         <Grid item xs={12} md={3}>
                                                                                                             <DatePicker label="Departure Date" value={seg.departure_date ? dayjs(seg.departure_date) : null}
                                                                                                                 onChange={(d)=>{
