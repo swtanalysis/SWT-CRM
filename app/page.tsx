@@ -392,17 +392,18 @@ export default function DashboardPage() {
   }, [fetchData, openModal]);
 
   // --- REMINDER GENERATION ---
-  const reminders = useMemo<Reminder[]>(() => {
-    const today = dayjs();
+    const reminders = useMemo<Reminder[]>(() => {
+        // Use startOf('day') so diff in 'day' units is calendar-based (prevents tomorrow showing as today)
+        const today = dayjs().startOf('day');
     const allReminders: Reminder[] = [];
     const getClientName = (clientId: string) => clients.find(c => c.id === clientId)?.first_name || 'Unknown';
 
     clients.forEach(client => {
-        const dob = dayjs(client.dob);
+                const dob = dayjs(client.dob).startOf('day');
         if (!dob.isValid()) return;
         let birthdayThisYear = dob.year(today.year());
-        if (birthdayThisYear.isBefore(today, 'day')) birthdayThisYear = birthdayThisYear.add(1, 'year');
-        const daysLeft = birthdayThisYear.diff(today, 'day');
+                if (birthdayThisYear.isBefore(today, 'day')) birthdayThisYear = birthdayThisYear.add(1, 'year');
+                const daysLeft = birthdayThisYear.startOf('day').diff(today, 'day');
         if (daysLeft >= 0 && daysLeft <= 7) {
             allReminders.push({ type: 'Birthday', id: client.id, name: `${client.first_name} ${client.last_name}`, dob: client.dob, days_left: daysLeft, client_id: client.id });
         }
@@ -413,7 +414,7 @@ export default function DashboardPage() {
             const expiryDateField = item.expiry_date || item.end_date;
             if (!expiryDateField) return;
 
-            const expiryDate = dayjs(expiryDateField);
+                        const expiryDate = dayjs(expiryDateField).startOf('day');
             if (!expiryDate.isValid()) return;
             const daysLeft = expiryDate.diff(today, 'day');
             if (daysLeft >= 0 && daysLeft <= threshold) { 
@@ -435,7 +436,7 @@ export default function DashboardPage() {
     checkExpiry(policies, 'Policy', 180);
 
     bookings.forEach(booking => {
-        const departureDate = dayjs(booking.departure_date);
+                const departureDate = dayjs(booking.departure_date).startOf('day');
         if (!departureDate.isValid()) return;
         const daysLeft = departureDate.diff(today, 'day');
         if (daysLeft >= 0 && daysLeft <= 365) {
