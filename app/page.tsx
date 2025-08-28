@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import type { Client, Booking, Visa, Passport, Policy, Reminder } from '../lib/types'
 import { createClient, Session } from '@supabase/supabase-js'
 import {
   Box, CssBaseline, AppBar, Toolbar, Typography, Container, Paper, CircularProgress,
@@ -15,6 +16,7 @@ import {
     Autocomplete
 } from '@mui/material'
 import { Grid } from '@mui/material';
+import dynamic from 'next/dynamic';
 import {
   Dashboard as DashboardIcon, People as PeopleIcon, Flight as FlightIcon, VpnKey as VpnKeyIcon,
   CreditCard as CreditCardIcon, Policy as PolicyIcon, Delete as DeleteIcon, Add as AddIcon,
@@ -39,100 +41,17 @@ import html2canvas from 'html2canvas'
 
 dayjs.extend(relativeTime)
 
+// --- CONSTANTS & SHARED CONFIG ---
+const drawerWidth = 240;
+const rightDrawerWidth = 320;
+const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#00C49F', '#AF19FF', '#FF6666'];
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'YOUR_SUPABASE_URL'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-// --- TYPE DEFINITIONS ---
-interface BaseEntity { id: string; created_at: string; }
-// Trip segment for multi-city bookings
-export interface TripSegment {
-    origin: string;
-    destination: string;
-    departure_date: string; // YYYY-MM-DD
-    airline?: string;
-}
-export interface Client extends BaseEntity { first_name: string; middle_name?: string; last_name: string; email_id: string; mobile_no: string; dob: string; nationality: string; } 
-export interface Booking extends BaseEntity { client_id: string; reference: string; vendor: string; destination: string; check_in: string; check_out: string; confirmation_no: string; seat_reference?: string; meal_preference?: string; special_requirement?: string; booking_type: string; pnr: string; departure_date?: string; amount?: number; status?: 'Confirmed' | 'Pending' | 'Cancelled'; segments?: TripSegment[] } // Made optional fields truly optional
-export interface Visa extends BaseEntity { client_id: string; country: string; visa_type: string; visa_number: string; issue_date: string; expiry_date: string; notes: string; }
-export interface Passport extends BaseEntity { client_id: string; passport_number: string; issue_date: string; expiry_date: string; }
-export interface Policy extends BaseEntity { client_id: string; booking_id: string; policy_number: string; insurer: string; sum_insured: number; start_date: string; end_date: string; premium_amount: number; }
-export interface Reminder { type: string; id: string; name: string; days_left?: number; client_id?: string; [key: string]: any; }
-interface ClientDocument extends BaseEntity { client_id: string; file_name: string; file_path: string; }
-interface ClientNote extends BaseEntity { client_id: string; note: string; user: string; }
-
-
-const drawerWidth = 240;
-const rightDrawerWidth = 320;
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#AF19FF', '#FF6666', '#66B2FF']; // Expanded colors for more distinct charts
-
-// --- AUTHENTICATION COMPONENT ---
-const AuthComponent = ({ setSession }: { setSession: (session: Session | null) => void }) => {
-    const [loading, setLoading] = useState(false);
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
-
-    const handleAuth = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setMessage(null);
-
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
-        setLoading(false);
-        if (error) {
-            setMessage({ type: 'error', text: error.message });
-        } else if (data.session) {
-            setSession(data.session);
-        }
-    };
-
-    return (
-        <Container component="main" maxWidth="xs">
-            <CssBaseline />
-            <Box sx={{ marginTop: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <img src="/SWT-Logo-TD.png" alt="SWT Logo" style={{ width: '150px', marginBottom: '1rem' }} />
-                <Typography component="h1" variant="h5">
-                    Sahajanand World Travels CRM
-                </Typography>
-                <Typography component="h2" variant="subtitle1" sx={{ mt: 2 }}>
-                    Sign In
-                </Typography>
-                <Box component="form" onSubmit={handleAuth} noValidate sx={{ mt: 1 }}>
-                    <TextField
-                        margin="normal"
-                        required
-                        fullWidth
-                        id="email"
-                        label="Email Address"
-                        name="email"
-                        autoComplete="email"
-                        autoFocus
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                    />
-                    <TextField
-                        margin="normal"
-                        required
-                        fullWidth
-                        name="password"
-                        label="Password"
-                        type="password"
-                        id="password"
-                        autoComplete="current-password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                    />
-                    <Button type="submit" fullWidth variant="contained" sx={{ mt: 3, mb: 2 }} disabled={loading}>
-                        {loading ? <CircularProgress size={24} /> : 'Sign In'}
-                    </Button>
-                    {message && <Alert severity={message.type}>{message.text}</Alert>}
-                </Box>
-            </Box>
-        </Container>
-    );
-};
+// Lazy load heavy itinerary builder to reduce initial bundle
+const ItinerariesView = dynamic(() => import('../components/ItinerariesView'), { ssr: false });
 
 
 // --- MAIN DASHBOARD PAGE ---
@@ -619,7 +538,7 @@ export default function DashboardPage() {
     return filtered;
   }, [debouncedSearchTerm, activeView, clients, bookings, visas, passports, policies, sortColumn, sortDirection, filters]);
 
-  const menuItems = [
+    const menuItems = [
     { text: 'Dashboard', icon: <DashboardIcon />, view: 'Dashboard' },
     { text: 'Client Insight', icon: <AccountBoxIcon />, view: 'Client Insight' },
     { text: 'Clients', icon: <PeopleIcon />, view: 'Clients' },
@@ -627,6 +546,7 @@ export default function DashboardPage() {
     { text: 'Visas', icon: <VpnKeyIcon />, view: 'Visas'},
     { text: 'Passports', icon: <CreditCardIcon />, view: 'Passports' },
     { text: 'Policies', icon: <PolicyIcon />, view: 'Policies'},
+    { text: 'Itineraries', icon: <NotesIcon />, view: 'Itineraries' },
   ];
 
   const drawer = (
@@ -665,7 +585,8 @@ export default function DashboardPage() {
 
     switch (activeView) {
         case 'Dashboard': return <DashboardView stats={{clients: clients.length, bookings: bookings.length}} clientData={clients} bookingData={bookings} policyData={policies} visaData={visas} passportData={passports} globalReminders={reminders} />;
-        case 'Client Insight': return <ClientInsightView allClients={clients} allBookings={bookings} allVisas={visas} allPassports={passports} allPolicies={policies} allNotes={clientNotes} globalReminders={reminders} onUpdate={fetchData} onShowSnackbar={setSnackbar} onOpenModal={handleOpenModal} onDeleteItem={handleDeleteItem} />;
+    case 'Client Insight': return <ClientInsightView allClients={clients} allBookings={bookings} allVisas={visas} allPassports={passports} allPolicies={policies} allNotes={clientNotes} globalReminders={reminders} onUpdate={fetchData} onShowSnackbar={setSnackbar} onOpenModal={handleOpenModal} onDeleteItem={handleDeleteItem} />;
+    case 'Itineraries': return <ItinerariesView clients={clients} />;
         case 'Clients': 
         case 'Bookings':
         case 'Visas':
@@ -1507,67 +1428,68 @@ export default function DashboardPage() {
   };
 
 
-  // --- MAIN RENDER ---
-  if (!session) {
-    return <AuthComponent setSession={setSession} />;
-  }
 
-  return (
-    <Box sx={{ display: 'flex' }}>
-      <CssBaseline />
-      <AppBar position="fixed"
-        sx={{
-          zIndex: (theme) => theme.zIndex.drawer + 1,
-          transition: (theme) => theme.transitions.create(['width','margin'], { duration: theme.transitions.duration.shortest })
-        }}>
-        <Toolbar>
-          <IconButton color="inherit" edge="start" onClick={handleDrawerToggle} sx={{ mr: 2, display: { sm: 'none' } }}><MenuIcon /></IconButton>
-          <Typography variant="h6" noWrap component="div" sx={{flexGrow: 1}}>{activeView}</Typography>
-          <Tooltip title={showReminders ? 'Hide Reminders' : 'Show Reminders'}>
-            <IconButton color="inherit" onClick={() => setShowReminders(o=>!o)}>
-              <Badge badgeContent={reminders.length} color="error">
-                <NotificationsIcon />
-              </Badge>
-            </IconButton>
-          </Tooltip>
-        </Toolbar>
-      </AppBar>
-      <Box component="nav" sx={{ width: { sm: actualLeftWidth }, flexShrink: { sm: 0 } }}>
-        {/* Mobile drawer */}
-        <Drawer variant="temporary" open={mobileOpen} onClose={handleDrawerToggle} ModalProps={{ keepMounted: true }}
-          sx={{ display: { xs: 'block', sm: 'none' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth } }}>{drawer}</Drawer>
-        {/* Desktop collapsible drawer */}
-        <Drawer variant="permanent" open
-          sx={{ display: { xs: 'none', sm: 'block' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: actualLeftWidth, borderRight: '1px solid rgba(0,0,0,0.12)', overflowX: 'hidden', transition: (theme)=>theme.transitions.create('width',{ duration: theme.transitions.duration.shortest }) } }}>
-            {drawer}
-        </Drawer>
-      </Box>
-      <Box component="main" 
-        sx={{ 
-            flexGrow: 1, 
-            p: 3, 
-            bgcolor: '#f4f6f8', 
-            minHeight: '100vh',
-            // LAYOUT FIX: Removed manual width calculations. Flex-grow will now correctly handle the width.
-        }}>
-        <Toolbar /> {/* Toolbar offset for content below AppBar */}
-        <Container maxWidth="xl" sx={{ pt: 2, pb: 2 }}>
-          {renderContent()}
-        </Container>
-      </Box>
-      {showReminders && <RightDrawer reminders={reminders} onReminderClick={handleReminderClick} />}
-      {openModal && <FormModal />}
-      {docModalOpen && <DocumentUploadModal onShowSnackbar={setSnackbar} />}
-      <ConfirmationDialog />
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        message={snackbar.message}
-      />
-    </Box>
-  );
+    return (
+        <LocalizationProvider dateAdapter={AdapterDayjs}>
+            {!session ? (
+                <AuthComponent setSession={setSession} />
+            ) : (
+                <Box sx={{ display: 'flex' }}>
+                    <CssBaseline />
+                    <AppBar position="fixed"
+                        sx={{
+                            zIndex: (theme) => theme.zIndex.drawer + 1,
+                            transition: (theme) => theme.transitions.create(['width','margin'], { duration: theme.transitions.duration.shortest })
+                        }}>
+                        <Toolbar>
+                            <IconButton color="inherit" edge="start" onClick={handleDrawerToggle} sx={{ mr: 2, display: { sm: 'none' } }}><MenuIcon /></IconButton>
+                            <Typography variant="h6" noWrap component="div" sx={{flexGrow: 1}}>{activeView}</Typography>
+                            <Tooltip title={showReminders ? 'Hide Reminders' : 'Show Reminders'}>
+                                <IconButton color="inherit" onClick={() => setShowReminders(o=>!o)}>
+                                    <Badge badgeContent={reminders.length} color="error">
+                                        <NotificationsIcon />
+                                    </Badge>
+                                </IconButton>
+                            </Tooltip>
+                        </Toolbar>
+                    </AppBar>
+                    <Box component="nav" sx={{ width: { sm: actualLeftWidth }, flexShrink: { sm: 0 } }}>
+                        <Drawer variant="temporary" open={mobileOpen} onClose={handleDrawerToggle} ModalProps={{ keepMounted: true }}
+                            sx={{ display: { xs: 'block', sm: 'none' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth } }}>{drawer}</Drawer>
+                        <Drawer variant="permanent" open
+                            sx={{ display: { xs: 'none', sm: 'block' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: actualLeftWidth, borderRight: '1px solid rgba(0,0,0,0.12)', overflowX: 'hidden', transition: (theme)=>theme.transitions.create('width',{ duration: theme.transitions.duration.shortest }) } }}>
+                                {drawer}
+                        </Drawer>
+                    </Box>
+                    <Box component="main" 
+                        sx={{ 
+                                flexGrow: 1, 
+                                p: 3, 
+                                bgcolor: '#f4f6f8', 
+                                minHeight: '100vh'
+                        }}>
+                        <Toolbar />
+                        <Container maxWidth="xl" sx={{ pt: 2, pb: 2 }}>
+                            {renderContent()}
+                        </Container>
+                    </Box>
+                    {showReminders && <RightDrawer reminders={reminders} onReminderClick={handleReminderClick} />}
+                    {openModal && <FormModal />}
+                    {docModalOpen && <DocumentUploadModal onShowSnackbar={setSnackbar} />}
+                    <ConfirmationDialog />
+                    <Snackbar
+                        open={snackbar.open}
+                        autoHideDuration={6000}
+                        onClose={() => setSnackbar({ ...snackbar, open: false })}
+                        message={snackbar.message}
+                    />
+                </Box>
+            )}
+        </LocalizationProvider>
+    );
 }
+
+// (ItinerariesView moved to components/ItinerariesView.tsx and dynamically imported)
 
 // --- REUSABLE INSIGHT TABLE COMPONENT ---
 const InsightTable = ({ data, columns }: { data: any[], columns: { key: string, label: string, render?: (val: any) => React.ReactNode }[] }) => {
@@ -1595,6 +1517,43 @@ const InsightTable = ({ data, columns }: { data: any[], columns: { key: string, 
                 </TableBody>
             </Table>
         </TableContainer>
+    );
+};
+
+// --- AUXILIARY TYPES (local) ---
+interface ClientNote { id: string; client_id: string; note: string; user?: string; created_at?: string; }
+interface ClientDocument { id: string; client_id: string; file_name: string; file_path: string; created_at?: string; }
+interface TripSegment { origin: string; destination: string; departure_date: string; airline?: string; }
+
+// --- SIMPLE AUTH COMPONENT ---
+const AuthComponent = ({ setSession }: { setSession: (s: Session | null) => void }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const handleLogin = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true); setError(null);
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) setError(error.message); else setSession(data.session);
+        setLoading(false);
+    };
+
+    return (
+        <Container maxWidth="xs" sx={{ mt: 12 }}>
+            <Paper sx={{ p: 4, borderRadius: 2 }}>
+                <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold' }}>Sign In</Typography>
+                <form onSubmit={handleLogin}>
+                    <Stack spacing={2}>
+                        {error && <Alert severity="error">{error}</Alert>}
+                        <TextField label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required fullWidth />
+                        <TextField label="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required fullWidth />
+                        <Button type="submit" variant="contained" disabled={loading}>{loading ? 'Signing in...' : 'Login'}</Button>
+                    </Stack>
+                </form>
+            </Paper>
+        </Container>
     );
 };
 
