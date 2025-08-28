@@ -597,12 +597,18 @@ export default function DashboardPage() {
     if (sortColumn) {
         // Create a shallow copy before sorting to avoid mutating the original state
         filtered = [...filtered].sort((a, b) => {
-            const aVal = (a as any)[sortColumn];
-            const bVal = (b as any)[sortColumn];
+            let aVal = (a as any)[sortColumn];
+            let bVal = (b as any)[sortColumn];
 
             // Handle null or undefined values
             if (aVal == null) return 1;
             if (bVal == null) return -1;
+
+            // Case-insensitive compare for strings
+            if (typeof aVal === 'string' && typeof bVal === 'string') {
+                aVal = aVal.toLowerCase();
+                bVal = bVal.toLowerCase();
+            }
 
             if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
             if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
@@ -691,9 +697,16 @@ export default function DashboardPage() {
         setOpportunityTab(newValue);
     };
 
-    const nationalityData = useMemo(() => Object.entries(
-        clientData.reduce((acc: Record<string, number>, c: Client) => ({ ...acc, [c.nationality]: (acc[c.nationality] || 0) + 1 }), {})
-    ).map(([name, value]) => ({ name, value })), [clientData]);
+    const nationalityData = useMemo(() => {
+        const agg = clientData.reduce((acc: Record<string, { label: string; count: number }>, c: Client) => {
+            const raw = c.nationality || 'Unknown';
+            const key = raw.toLowerCase();
+            if (!acc[key]) acc[key] = { label: raw, count: 0 };
+            acc[key].count++;
+            return acc;
+        }, {});
+        return Object.values(agg).map(({ label, count }) => ({ name: label, value: count }));
+    }, [clientData]);
 
     const bookingsByMonthData = useMemo(() => {
         const counts = Array(12).fill(0).map((_, i) => ({ name: dayjs().month(i).format('MMM'), bookings: 0 }));
@@ -719,12 +732,14 @@ export default function DashboardPage() {
     }, [bookingData, clientData]);
 
     const bookingStatusData = useMemo(() => {
-        const statusCounts = bookingData.reduce((acc: Record<string, number>, booking: Booking) => {
-            const status = booking.status || 'Pending';
-            acc[status] = (acc[status] || 0) + 1;
+        const statusCounts = bookingData.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
+            const raw = booking.status || 'Pending';
+            const key = raw.toLowerCase();
+            if (!acc[key]) acc[key] = { label: raw, count: 0 };
+            acc[key].count++;
             return acc;
         }, {});
-        return Object.entries(statusCounts).map(([name, value]) => ({ name, value }));
+        return Object.values(statusCounts).map(({ label, count }) => ({ name: label, value: count }));
     }, [bookingData]);
 
     const crossSellOpportunities = useMemo(() => {
@@ -762,17 +777,19 @@ export default function DashboardPage() {
     }, [clientData, bookingData, policyData, visaData, passportData]);
 
     const vendorPerformanceData = useMemo(() => {
-        const vendorRevenue = bookingData.reduce((acc: Record<string, number>, booking: Booking) => {
+        const vendorRevenue = bookingData.reduce((acc: Record<string, { label: string; total: number }>, booking: Booking) => {
             if (booking.vendor && booking.amount) {
-                acc[booking.vendor] = (acc[booking.vendor] || 0) + booking.amount;
+                const key = booking.vendor.toLowerCase();
+                if (!acc[key]) acc[key] = { label: booking.vendor, total: 0 };
+                acc[key].total += booking.amount;
             }
             return acc;
         }, {});
 
-        return Object.entries(vendorRevenue)
-            .sort(([, a], [, b]) => (b as number) - (a as number))
+        return Object.values(vendorRevenue)
+            .sort((a, b) => b.total - a.total)
             .slice(0, 7)
-            .map(([name, value]) => ({ name, 'Revenue': value }));
+            .map(({ label, total }) => ({ name: label, 'Revenue': total }));
     }, [bookingData]);
     
     const clientAgeData = useMemo(() => {
@@ -792,25 +809,29 @@ export default function DashboardPage() {
     }, [clientData]);
 
     const popularDestinations = useMemo(() => {
-        const destinationCounts = bookingData.reduce((acc: Record<string, number>, booking: Booking) => {
-            const dest = booking.destination || 'N/A';
-            acc[dest] = (acc[dest] || 0) + 1;
+        const destinationCounts = bookingData.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
+            const raw = booking.destination || 'N/A';
+            const key = raw.toLowerCase();
+            if (!acc[key]) acc[key] = { label: raw, count: 0 };
+            acc[key].count++;
             return acc;
         }, {});
 
-        return Object.entries(destinationCounts)
-            .sort(([, a], [, b]) => (b as number) - (a as number))
+        return Object.values(destinationCounts)
+            .sort((a, b) => b.count - a.count)
             .slice(0, 7)
-            .map(([name, value]) => ({ name, 'Bookings': value }));
+            .map(({ label, count }) => ({ name: label, 'Bookings': count }));
     }, [bookingData]);
 
     const bookingTypeData = useMemo(() => {
-        const typeCounts = bookingData.reduce((acc: Record<string, number>, booking: Booking) => {
-            const type = booking.booking_type || 'Other';
-            acc[type] = (acc[type] || 0) + 1;
+        const typeCounts = bookingData.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
+            const raw = booking.booking_type || 'Other';
+            const key = raw.toLowerCase();
+            if (!acc[key]) acc[key] = { label: raw, count: 0 };
+            acc[key].count++;
             return acc;
         }, {});
-        return Object.entries(typeCounts).map(([name, value]) => ({ name, value }));
+        return Object.values(typeCounts).map(({ label, count }) => ({ name: label, value: count }));
     }, [bookingData]);
     
     const avgTripDuration = useMemo(() => {
@@ -1702,19 +1723,29 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     const [showDetails, setShowDetails] = useState(false); // toggle for detailed fields
 
     const handleSearch = () => {
-        const term = insightSearchTerm.trim().toLowerCase();
-        if (!term) {
+        const raw = insightSearchTerm.trim();
+        if (!raw) {
             setSelectedClient(null);
             setSearchResults([]);
             return;
         }
-        const results = allClients.filter(c =>
-            (c.first_name || '').toLowerCase().includes(term) ||
-            (c.last_name || '').toLowerCase().includes(term) ||
-            (c.email_id || '').toLowerCase().includes(term) ||
-            (c.mobile_no || '').toLowerCase().includes(term) ||
-            (c.nationality || '').toLowerCase().includes(term)
-        );
+        const term = raw.toLowerCase();
+        const tokens = term.split(/\s+/).filter(Boolean); // multi-word support
+
+        const matches = (c: Client) => {
+            const first = (c.first_name || '').toLowerCase();
+            const middle = (c.middle_name || '').toLowerCase();
+            const last = (c.last_name || '').toLowerCase();
+            const email = (c.email_id || '').toLowerCase();
+            const phone = (c.mobile_no || '').toLowerCase();
+            const nationality = (c.nationality || '').toLowerCase();
+            const fullName = [first, middle, last].filter(Boolean).join(' ').trim();
+            const haystacks = [first, middle, last, fullName, email, phone, nationality];
+            // Every token must appear in at least one haystack (AND across tokens / OR across fields)
+            return tokens.every(t => haystacks.some(h => h.includes(t)));
+        };
+
+        const results = allClients.filter(matches);
         setSearchResults(results);
         setSelectedClient(results.length === 1 ? results[0] : null);
     };
