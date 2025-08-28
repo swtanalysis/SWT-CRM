@@ -58,6 +58,13 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
   const latestAppliedRef = useRef(0);
   // Skip autosave immediately after creation until user changes something meaningful
   const freshlyCreatedRef = useRef(false);
+  // Track local change version to prevent stale save responses clobbering newer edits
+  const changeVersionRef = useRef(0);
+  const bumpVersion = () => { changeVersionRef.current++; };
+  // Track deleted activity IDs until server confirms deletion
+  const deletedActivityIdsRef = useRef<Set<string>>(new Set());
+  // Track currently focused field (to avoid overwriting in-progress typing)
+  const focusedFieldRef = useRef<string|null>(null);
 
   const fetchItineraries = useCallback(async () => {
     setLoading(true);
@@ -92,16 +99,18 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
   // Autosave (debounced)
   const scheduleSave = () => {
     if (!selected || !selected.id) return; // only autosave existing
+    if (focusedFieldRef.current) return; // defer until blur to avoid overwriting in-progress typing
     if (freshlyCreatedRef.current) {
-      // First change after creation: allow it but clear the flag and delay save scheduling until next change
+      // Previously we skipped the first change after creation causing client selection not to persist.
+      // Now we just clear the flag and continue to schedule the save.
       freshlyCreatedRef.current = false;
-      return;
     }
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(()=> { saveSelected(); }, 800);
   };
 
   const handleFieldChange = (field: keyof Itinerary, value: any) => {
+    bumpVersion();
     setSelected(prev => {
       if (!prev) return prev;
       let next = { ...prev, [field]: value } as Itinerary;
@@ -114,6 +123,7 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
   };
 
   const addActivity = (dayIndex: number) => {
+    bumpVersion();
     setSelected(prev => {
       if (!prev) return prev;
       const days = [...prev.days];
@@ -127,6 +137,7 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
   };
 
   const updateActivity = (dayIndex: number, actId: string, patch: Partial<ItineraryActivity>) => {
+    bumpVersion();
     setSelected(prev => {
       if (!prev) return prev;
       const days = [...prev.days];
@@ -139,15 +150,17 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
   };
 
   const removeActivity = (dayIndex: number, actId: string) => {
+    bumpVersion();
     setSelected(prev => {
       if (!prev) return prev;
       const days = [...prev.days];
       const target = { ...days[dayIndex] };
       target.activities = target.activities.filter(a => a.id !== actId);
       days[dayIndex] = target;
+      if (actId) deletedActivityIdsRef.current.add(actId);
+      saveSelected({ days }, { forceApply: true });
       return { ...prev, days };
     });
-    scheduleSave();
   };
 
   const createItinerary = async (base?: Itinerary) => {
@@ -162,17 +175,20 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
     if (!payload.id) delete payload.id;
     const { data, error } = await supabase.from('itineraries').insert([payload]).select().single();
     if (error) { setSnackbar({open:true, message:`Create failed: ${error.message}`, severity:'error'}); return; }
-    setItineraries(prev => [data as Itinerary, ...prev]);
-    setSelected(data as Itinerary);
+  setItineraries(prev => [data as Itinerary, ...prev]);
+  bumpVersion();
+  setSelected(data as Itinerary);
   freshlyCreatedRef.current = true; // prevent immediate autosave cycle wiping defaults
     setSnackbar({open:true, message:'Itinerary created', severity:'success'});
   };
 
-  const saveSelected = async () => {
+  const saveSelected = async (override?: Partial<Itinerary>, opts?: { forceApply?: boolean }) => {
     if (!selected) return;
     setSaving(true);
     const mutationId = ++saveSeqRef.current;
-    const snapshot = selected; // capture current
+    const snapshotVersion = changeVersionRef.current; // capture version at snapshot time
+    // Merge any optimistic override (e.g., client_id change) into snapshot for this save
+    const snapshot = { ...selected, ...(override||{}) } as Itinerary;
     const { id, ...rest } = snapshot;
     const { error, data } = await supabase.from('itineraries').update({ ...rest, total_cost: costSummary.total }).eq('id', id).select().single();
     if (error) {
@@ -182,10 +198,51 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
       return;
     }
     // Apply only if this mutation is the latest
-    if (mutationId >= latestAppliedRef.current) {
+  if (mutationId >= latestAppliedRef.current && (opts?.forceApply || snapshotVersion === changeVersionRef.current)) {
       latestAppliedRef.current = mutationId;
-      setItineraries(prev => prev.map(i => i.id === id ? data as Itinerary : i));
-      setSelected(prev => prev && prev.id === id ? (data as Itinerary) : prev);
+      // Merge server response with any optimistic local activities that may not yet be persisted
+      setItineraries(prev => prev.map(i => {
+        if (i.id !== id) return i;
+        const server = data as Itinerary;
+        if (!i.days || !server.days) return server;
+        const mergedDays = server.days.map((sd, idx) => {
+          const localDay = i.days[idx];
+          if (!localDay) return sd;
+          const serverActs = (sd.activities||[]);
+          const localActs = (localDay.activities||[]);
+          const map: Record<string, any> = {};
+          // Put local first so in-progress typing wins over stale server snapshot
+          localActs.forEach(a => { const key = a.id || JSON.stringify(a); map[key] = a; });
+          serverActs.forEach(a => { if (a.id && deletedActivityIdsRef.current.has(a.id)) return; const key = a.id || JSON.stringify(a); if (!map[key]) map[key] = a; });
+          return { ...sd, activities: Object.values(map) };
+        });
+        // Clean up confirmed deletions (ids no longer in server)
+        deletedActivityIdsRef.current.forEach(delId => {
+          const stillExists = mergedDays.some(d => (d.activities||[]).some(a => a.id === delId));
+          if (!stillExists) deletedActivityIdsRef.current.delete(delId);
+        });
+        return { ...(data as Itinerary), days: mergedDays };
+      }));
+      setSelected(prev => {
+        if (!prev || prev.id !== id) return prev;
+        const server = data as Itinerary;
+        if (!prev.days || !server.days) return server;
+        const mergedDays = server.days.map((sd, idx) => {
+          const localDay = prev.days[idx];
+          if (!localDay) return sd;
+          const serverActs = (sd.activities||[]);
+          const localActs = (localDay.activities||[]);
+          const map: Record<string, any> = {};
+          localActs.forEach(a => { const key = a.id || JSON.stringify(a); map[key] = a; });
+          serverActs.forEach(a => { if (a.id && deletedActivityIdsRef.current.has(a.id)) return; const key = a.id || JSON.stringify(a); if (!map[key]) map[key] = a; });
+          return { ...sd, activities: Object.values(map) };
+        });
+        deletedActivityIdsRef.current.forEach(delId => {
+          const stillExists = mergedDays.some(d => (d.activities||[]).some(a => a.id === delId));
+          if (!stillExists) deletedActivityIdsRef.current.delete(delId);
+        });
+        return { ...server, days: mergedDays };
+      });
     }
     setSaving(false);
   };
@@ -215,21 +272,34 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
 
   const exportPdf = () => {
     if (!selected) return;
-    const node = document.getElementById('itinerary-export');
+    // Use comprehensive hidden printable container
+    const node = document.getElementById('itinerary-print-full');
     if (!node) return;
     setSnackbar({open:true, message:'Generating PDF...', severity:'info'});
     setTimeout(()=>{
-      html2canvas(node as HTMLElement).then(canvas => {
+      html2canvas(node as HTMLElement, { scale: 2 }).then(canvas => {
         const imgData = canvas.toDataURL('image/png');
         const pdf = new jsPDF('p','mm','a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const ratio = canvas.width / canvas.height;
-        const height = pdfWidth / ratio;
-        pdf.addImage(imgData,'PNG',0,0,pdfWidth,height);
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const imgWidth = pageWidth;
+        const imgHeight = canvas.height * imgWidth / canvas.width;
+        let heightLeft = imgHeight;
+        let position = 0;
+        pdf.addImage(imgData,'PNG',0,position,imgWidth,imgHeight);
+        heightLeft -= pageHeight;
+        while (heightLeft > 0) {
+          position -= pageHeight;
+            pdf.addPage();
+            pdf.addImage(imgData,'PNG',0,position,imgWidth,imgHeight);
+            heightLeft -= pageHeight;
+        }
         pdf.save(`${selected.title.replace(/\s+/g,'-').toLowerCase()}.pdf`);
         setSnackbar({open:true, message:'PDF downloaded', severity:'success'});
+      }).catch(err => {
+        setSnackbar({open:true, message:`PDF failed: ${err.message||err}`, severity:'error'});
       });
-    },40);
+    },30);
   };
 
   const templateItineraries = useMemo(()=> itineraries.filter(i => (i as any).is_template), [itineraries]);
@@ -278,9 +348,18 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
           {selected && (
             <Box>
               <Stack direction={{ xs:'column', md:'row' }} spacing={2} alignItems={{ md:'center' }} justifyContent="space-between" mb={2}>
-                <TextField label="Title" value={selected.title} onChange={e=>{ setSelected(p=> p? { ...p, title: e.target.value }: p); scheduleSave(); }} fullWidth />
+                <TextField label="Title" value={selected.title} 
+                  onFocus={()=>{ focusedFieldRef.current='title'; }}
+                  onBlur={()=>{ 
+                    if (focusedFieldRef.current==='title') focusedFieldRef.current=null; 
+                    // Save once after user finishes editing title
+                    scheduleSave();
+                  }}
+                  onChange={e=>{ bumpVersion(); setSelected(p=> p? { ...p, title: e.target.value }: p); /* defer save until blur to prevent last char loss */ }} 
+                  fullWidth 
+                />
                 <Stack direction="row" spacing={1}>
-                  <Tooltip title="Save Now"><span><IconButton color="primary" onClick={saveSelected} disabled={saving}><SaveIcon /></IconButton></span></Tooltip>
+                  <Tooltip title="Save Now"><span><IconButton color="primary" onClick={()=>saveSelected()} disabled={saving}><SaveIcon /></IconButton></span></Tooltip>
                   <Tooltip title="New Version"><IconButton onClick={newVersion}><EditIcon /></IconButton></Tooltip>
                   <Tooltip title="Export PDF"><IconButton onClick={exportPdf}><DownloadIcon /></IconButton></Tooltip>
                 </Stack>
@@ -291,18 +370,26 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
                 <Grid item xs={12} md={4}>
                   <FormControl size="small" fullWidth>
                     <InputLabel>Client</InputLabel>
-                    <Select label="Client" value={selected.client_id || ''} onChange={e=>{ setSelected(p=> p? { ...p, client_id: e.target.value || null }: p); scheduleSave(); }}>
+                    <Select label="Client" value={selected.client_id || ''} onChange={e=>{
+                      const val = (e.target.value as string) || '';
+                      const newId = val || null;
+                      bumpVersion();
+                      setSelected(p=> p? { ...p, client_id: newId }: p);
+                      setItineraries(list => list.map(i => i.id === selected?.id ? { ...i, client_id: newId } : i));
+                      // Save with override so we don't lose change due to stale selected in async
+                      saveSelected({ client_id: newId });
+                    }}>
                       <MenuItem value=""><em>Unassigned</em></MenuItem>
                       {clients.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
                     </Select>
                   </FormControl>
                 </Grid>
-                <Grid item xs={6} md={2}><TextField size="small" label="Travelers" type="number" value={selected.travelers} onChange={e=>{ setSelected(p=> p? { ...p, travelers: parseInt(e.target.value)||0 }: p); scheduleSave(); }} fullWidth /></Grid>
-                <Grid item xs={6} md={2}><TextField size="small" label="Currency" value={selected.currency} onChange={e=>{ setSelected(p=> p? { ...p, currency: e.target.value }: p); scheduleSave(); }} fullWidth /></Grid>
+                <Grid item xs={6} md={2}><TextField size="small" label="Travelers" type="number" value={selected.travelers} onChange={e=>{ bumpVersion(); setSelected(p=> p? { ...p, travelers: parseInt(e.target.value)||0 }: p); scheduleSave(); }} fullWidth /></Grid>
+                <Grid item xs={6} md={2}><TextField size="small" label="Currency" value={selected.currency} onChange={e=>{ bumpVersion(); setSelected(p=> p? { ...p, currency: e.target.value }: p); scheduleSave(); }} fullWidth /></Grid>
                 <Grid item xs={12} md={2}>
                   <FormControl size="small" fullWidth>
                     <InputLabel>Status</InputLabel>
-                    <Select value={selected.status || ''} label="Status" onChange={e=>{ setSelected(p=> p? { ...p, status: e.target.value }: p); scheduleSave(); }}>
+                    <Select value={selected.status || ''} label="Status" onChange={e=>{ bumpVersion(); setSelected(p=> p? { ...p, status: e.target.value }: p); scheduleSave(); }}>
                       <MenuItem value="Draft">Draft</MenuItem>
                       <MenuItem value="Confirmed">Confirmed</MenuItem>
                       <MenuItem value="Archived">Archived</MenuItem>
@@ -377,6 +464,45 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
             </Box>
           )}
         </Paper>
+        {/* Hidden printable full itinerary (all tabs) */}
+        {selected && (
+          <Box id="itinerary-print-full" sx={{ position:'absolute', top:-99999, left:-99999, width: 800, bgcolor:'#fff', color:'#000', p:3, fontSize:12 }}>
+            <Typography variant="h5" sx={{ fontWeight:'bold', mb:1 }}>{selected.title}</Typography>
+            <Typography variant="subtitle2" sx={{ mb:2 }}>
+              {dayjs(selected.start_date).format('MMM D, YYYY')} - {dayjs(selected.end_date).format('MMM D, YYYY')} | Travelers: {selected.travelers} | Status: {selected.status}
+            </Typography>
+            {selected.client_id && (
+              <Typography sx={{ mb:2 }}>Client: {clients.find(c=>c.id===selected.client_id)?.first_name} {clients.find(c=>c.id===selected.client_id)?.last_name}</Typography>
+            )}
+            <Typography variant="h6" sx={{ mt:1, mb:1 }}>Day By Day</Typography>
+            {selected.days.map(d => (
+              <Box key={d.date} sx={{ mb:1.5 }}>
+                <Typography sx={{ fontWeight:'bold' }}>{dayjs(d.date).format('dddd, MMM D')}</Typography>
+                {(d.activities||[]).length === 0 && <Typography variant="body2" color="text.secondary">No activities</Typography>}
+                {(d.activities||[]).map(a => (
+                  <Box key={a.id} sx={{ pl:1, borderLeft:'2px solid #666', mb:0.5 }}>
+                    <Typography variant="body2"><strong>{a.time||'--:--'}</strong> | {a.type} | {a.description || 'No description'} {a.location ? `@ ${a.location}`:''} { (a.cost || 0) ? `- ${selected.currency} ${(a.cost||0).toFixed(2)}`:'' }</Typography>
+                  </Box>
+                ))}
+              </Box>
+            ))}
+            <Divider sx={{ my:2 }} />
+            <Typography variant="h6" sx={{ mb:1 }}>Pricing Summary</Typography>
+            <Box>
+              {Object.entries(costSummary.byType).map(([t,v]) => (
+                <Box key={t} sx={{ display:'flex', justifyContent:'space-between', fontSize:12 }}>
+                  <span>{t}</span><span>{selected.currency} {v.toFixed(2)}</span>
+                </Box>
+              ))}
+              <Box sx={{ mt:1, display:'flex', justifyContent:'space-between', fontWeight:'bold', fontSize:13 }}>
+                <span>Total</span><span>{selected.currency} {costSummary.total.toFixed(2)}</span>
+              </Box>
+              <Box sx={{ display:'flex', justifyContent:'space-between', fontSize:12 }}>
+                <span>Per Traveler</span><span>{selected.currency} {costSummary.perTraveler.toFixed(2)}</span>
+              </Box>
+            </Box>
+          </Box>
+        )}
       </Grid>
 
       <Dialog open={showNewDialog} onClose={()=>setShowNewDialog(false)} maxWidth="sm" fullWidth>
