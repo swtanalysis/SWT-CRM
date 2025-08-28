@@ -155,3 +155,58 @@ export type Itinerary = {
   status?: string // Draft / Confirmed / Archived
   created_at?: string
 }
+
+// --- User / Profile Types ---
+export interface Profile {
+  id: string
+  first_name?: string
+  middle_name?: string
+  last_name?: string
+  display_name?: string
+  phone?: string
+  avatar_url?: string
+  role?: 'admin' | 'agent' | 'viewer'
+  timezone?: string
+  locale?: string
+  currency?: string
+  date_format?: string
+  theme?: string
+  default_view?: string
+  signature?: string
+  bio?: string
+  prefs?: any
+  notification_prefs?: any
+  created_at?: string
+  updated_at?: string
+}
+
+export interface UserDailyMetrics {
+  user_id: string
+  date: string
+  bookings_count: number
+  revenue_sum: number
+  policies_count: number
+  avg_booking_value: number
+  tasks_completed: number
+  response_time_avg_ms: number
+}
+
+export interface UserActivity {
+  id: string | number
+  user_id: string
+  action: string
+  entity_type?: string
+  entity_id?: string
+  meta?: any
+  created_at: string
+}
+
+export interface UserApiKey {
+  id: string
+  user_id: string
+  name: string
+  hashed_key: string
+  last_used_at?: string
+  revoked_at?: string
+  created_at?: string
+}

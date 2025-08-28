@@ -18,15 +18,17 @@ import {
 import { Grid } from '@mui/material';
 import dynamic from 'next/dynamic';
 import {
-  Dashboard as DashboardIcon, People as PeopleIcon, Flight as FlightIcon, VpnKey as VpnKeyIcon,
-  CreditCard as CreditCardIcon, Policy as PolicyIcon, Delete as DeleteIcon, Add as AddIcon,
-  Edit as EditIcon, Menu as MenuIcon, Notifications as NotificationsIcon, Cake as CakeIcon,
-  Search as SearchIcon, ArrowUpward as ArrowUpwardIcon, ArrowDownward as ArrowDownwardIcon,
-  Logout as LogoutIcon, UploadFile as UploadFileIcon, Description as DescriptionIcon,
-  ExpandMore as ExpandMoreIcon, AccountBox as AccountBoxIcon, Download as DownloadIcon, Share as ShareIcon,
-  Analytics as AnalyticsIcon, Notes as NotesIcon, Star as StarIcon, Email as EmailIcon, Phone as PhoneIcon,
-  Visibility as VisibilityIcon, ExpandLess as ExpandLessIcon, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon
+    Dashboard as DashboardIcon, People as PeopleIcon, Flight as FlightIcon, VpnKey as VpnKeyIcon,
+    CreditCard as CreditCardIcon, Policy as PolicyIcon, Delete as DeleteIcon, Add as AddIcon,
+    Edit as EditIcon, Menu as MenuIcon, Notifications as NotificationsIcon, Cake as CakeIcon,
+    Search as SearchIcon, ArrowUpward as ArrowUpwardIcon, ArrowDownward as ArrowDownwardIcon,
+    Logout as LogoutIcon, UploadFile as UploadFileIcon, Description as DescriptionIcon,
+    ExpandMore as ExpandMoreIcon, AccountBox as AccountBoxIcon, Download as DownloadIcon, Share as ShareIcon,
+    Analytics as AnalyticsIcon, Notes as NotesIcon, Star as StarIcon, Email as EmailIcon, Phone as PhoneIcon,
+    Visibility as VisibilityIcon, ExpandLess as ExpandLessIcon, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon,
+    Person as PersonIcon
 } from '@mui/icons-material'
+import NextLink from 'next/link'
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
     LineChart, Line, PieChart, Pie, Cell,
@@ -214,11 +216,24 @@ export default function DashboardPage() {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [showReminders, setShowReminders] = useState(true);
   const actualLeftWidth = leftCollapsed ? 64 : drawerWidth;
+
+    // --- USER ACTIVITY LOGGING ---
+    const logActivity = async (action: string, entity: string, entityId?: string, meta?: any) => {
+        try {
+            const userId = session?.user?.id;
+            if (!userId) return;
+            await supabase.from('user_activity').insert({ user_id: userId, action, entity_type: entity, entity_id: entityId, meta });
+        } catch (e) {
+            // Silent fail; optionally add console debug
+            // console.debug('Activity log failed', e);
+        }
+    };
   // --- AUTHENTICATION ---
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       sessionRef.current = session;
+    if (session?.user) ensureProfile(session.user);
     })
 
     const { data: { subscription } = {} } = supabase.auth.onAuthStateChange((_event, nextSession) => {
@@ -229,6 +244,7 @@ export default function DashboardPage() {
       if (prevUserId !== nextUserId) {
         setSession(nextSession);
         sessionRef.current = nextSession;
+        if (nextSession?.user) ensureProfile(nextSession.user);
       }
     })
 
@@ -369,10 +385,34 @@ export default function DashboardPage() {
   // --- CRUD OPERATIONS ---
   const handleAddItem = async (itemData: unknown) => {
     const tableName = activeView.toLowerCase();
-    const { error } = await supabase.from(tableName).insert([itemData]);
-    if (error) setError(`Error adding item: ${error.message}`);
-    else { fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`}); }
+        const { error, data } = await supabase.from(tableName).insert([itemData]).select();
+        if (error) setError(`Error adding item: ${error.message}`);
+        else { 
+            const inserted = Array.isArray(data) ? data[0] : null;
+            logActivity('create', tableName, inserted?.id, { values: itemData });
+            fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`}); 
+        }
   };
+
+    const ensureProfile = async (user: { id: string; email?: string | null }) => {
+        try {
+            // Attempt to fetch existing profile
+            const { data, error } = await supabase.from('profiles').select('id').eq('id', user.id).maybeSingle();
+            if (error) return; // silent
+            if (!data) {
+                await supabase.from('profiles').insert({
+                    id: user.id,
+                    first_name: user.email ? user.email.split('@')[0] : null,
+                    display_name: user.email || 'User',
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    locale: (navigator.language || 'en-US'),
+                    currency: 'USD',
+                    theme: 'light'
+                });
+                logActivity('bootstrap','profiles', user.id);
+            }
+        } catch {}
+    };
 
   const handleUpdateItem = async (itemData: unknown) => {
     let tableName = activeView.toLowerCase();
@@ -381,11 +421,14 @@ export default function DashboardPage() {
         tableName = 'clients';
     }
 
-    if (typeof itemData === 'object' && itemData !== null && 'id' in itemData) {
-      const { id, ...updateData } = itemData as {id: string};
-      const { error } = await supabase.from(tableName).update(updateData).eq('id', id);
-      if (error) setError(`Error updating item: ${error.message}`);
-      else { fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${tableName.slice(0, -1)} updated successfully!`}); }
+        if (typeof itemData === 'object' && itemData !== null && 'id' in itemData) {
+            const { id, ...updateData } = itemData as {id: string};
+            const { error } = await supabase.from(tableName).update(updateData).eq('id', id);
+            if (error) setError(`Error updating item: ${error.message}`);
+            else { 
+                logActivity('update', tableName, id, { changes: updateData });
+                fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${tableName.slice(0, -1)} updated successfully!`}); 
+            }
     }
   };
 
@@ -397,9 +440,12 @@ export default function DashboardPage() {
   const executeDelete = async () => {
     if (!itemToDelete) return;
     const tableName = itemToDelete.view.toLowerCase();
-    const { error } = await supabase.from(tableName).delete().eq('id', itemToDelete.id);
-    if (error) setError(`Error deleting item: ${error.message}`);
-    else { fetchData(); setSnackbar({open: true, message: `${itemToDelete.view.slice(0, -1)} deleted successfully!`}); }
+        const { error } = await supabase.from(tableName).delete().eq('id', itemToDelete.id);
+        if (error) setError(`Error deleting item: ${error.message}`);
+        else { 
+            logActivity('delete', tableName, itemToDelete.id);
+            fetchData(); setSnackbar({open: true, message: `${itemToDelete.view.slice(0, -1)} deleted successfully!`}); 
+        }
     setConfirmOpen(false);
     setItemToDelete(null);
   };
@@ -1264,7 +1310,7 @@ export default function DashboardPage() {
                 file_path: filePath,
             });
             if (dbError) setDocError(`Failed to save document record: ${dbError.message}`);
-            else fetchDocuments();
+            else { fetchDocuments(); logActivity('upload','client_documents', selectedClientForDocs.id, { file: file.name }); }
         }
         setUploading(false);
     };
@@ -1291,9 +1337,9 @@ export default function DashboardPage() {
             setDocError(`Failed to delete file from storage: ${storageError.message}`);
             return;
         }
-        const { error: dbError } = await supabase.from('client_documents').delete().eq('id', doc.id);
-        if (dbError) setDocError(`Failed to delete document record: ${dbError.message}`);
-        else fetchDocuments();
+    const { error: dbError } = await supabase.from('client_documents').delete().eq('id', doc.id);
+    if (dbError) setDocError(`Failed to delete document record: ${dbError.message}`);
+    else { fetchDocuments(); logActivity('delete','client_documents', doc.id, { file: fileName }); }
     }
 
   const handleViewOrDownload = async (doc: ClientDocument) => {
@@ -1444,6 +1490,11 @@ export default function DashboardPage() {
                         <Toolbar>
                             <IconButton color="inherit" edge="start" onClick={handleDrawerToggle} sx={{ mr: 2, display: { sm: 'none' } }}><MenuIcon /></IconButton>
                             <Typography variant="h6" noWrap component="div" sx={{flexGrow: 1}}>{activeView}</Typography>
+                            <Tooltip title="Profile">
+                                <IconButton color="inherit" component={NextLink} href="/profile" sx={{ mr: 1 }}>
+                                    <PersonIcon />
+                                </IconButton>
+                            </Tooltip>
                             <Tooltip title={showReminders ? 'Hide Reminders' : 'Show Reminders'}>
                                 <IconButton color="inherit" onClick={() => setShowReminders(o=>!o)}>
                                     <Badge badgeContent={reminders.length} color="error">
@@ -1673,6 +1724,15 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     onOpenModal: (mode: 'add' | 'edit', item: unknown, overrideView?: string) => void,
     onDeleteItem: (id: string, view: string) => void
 }) => {
+    // Local activity logger (cannot access DashboardPage scoped helper)
+    const logActivity = async (action: string, entity: string, entityId?: string, meta?: any) => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const userId = session?.user?.id;
+            if (!userId) return;
+            await supabase.from('user_activity').insert({ user_id: userId, action, entity_type: entity, entity_id: entityId, meta });
+        } catch {}
+    };
     const [insightSearchTerm, setInsightSearchTerm] = useState('');
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
     const [clientData, setClientData] = useState<any>({ bookings: [], visas: [], passports: [], policies: [], notes: [], reminders: [] });
@@ -1737,6 +1797,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
             onShowSnackbar({ open: true, message: 'Note added successfully!' });
             setNewNote('');
             onUpdate(); // Re-fetch all data
+            logActivity('create','client_notes', selectedClient.id, { note: newNote.slice(0,120) });
         }
     };
     
@@ -1748,6 +1809,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
         } else {
             onShowSnackbar({ open: true, message: 'Note deleted successfully!' });
             onUpdate(); // Re-fetch all data
+            logActivity('delete','client_notes', noteId);
         }
     };
 
@@ -1772,6 +1834,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
             onShowSnackbar({ open: true, message: 'Note updated successfully!' });
             handleCloseNoteEditModal();
             onUpdate(); // Re-fetch all data
+            logActivity('update','client_notes', noteId);
         }
     };
 
