@@ -100,8 +100,8 @@ const ProfilePage: React.FC = () => {
       const [cl, bk, vs, pp, pl, it] = await Promise.all([
         supabase.from('clients').select('id, created_at').gte('created_at', since),
         supabase.from('bookings').select('id, created_at, amount').gte('created_at', since),
-        supabase.from('visas').select('id, created_at').gte('created_at', since),
-        supabase.from('passports').select('id, created_at').gte('created_at', since),
+        supabase.from('visas').select('id, created_at, amount').gte('created_at', since),
+        supabase.from('passports').select('id, created_at, amount').gte('created_at', since),
         supabase.from('policies').select('id, created_at, premium_amount').gte('created_at', since),
         supabase.from('itineraries').select('id, created_at').gte('created_at', since)
       ]);
@@ -200,8 +200,8 @@ const ProfilePage: React.FC = () => {
     return {
       clients: index(clients30),
       bookings: index(bookings30, r=>Number(r.amount)||0),
-      visas: index(visas30),
-      passports: index(passports30),
+      visas: index(visas30, r=>Number(r.amount)||0),
+      passports: index(passports30, r=>Number(r.amount)||0),
       policies: index(policies30, r=>Number(r.premium_amount)||0),
       itineraries: index(itineraries30)
     };
@@ -224,28 +224,38 @@ const ProfilePage: React.FC = () => {
     return { date: d.slice(5), tasks: m?.tasks_completed||0, responseMin: m? (m.response_time_avg_ms/60000):0 };
   }), [metrics, last30Days]);
 
-  const kpis = useMemo(()=> {
-    const bookings = salesTrend.reduce((s,r)=>s+r.bookings,0);
-    const revenue = salesTrend.reduce((s,r)=>s+r.revenue,0);
-    const policies = (dataScope==='me' && metrics.length)
-      ? metrics.reduce((s,m)=>s+m.policies_count,0)
-      : (deptDaily.policies ? Object.values(deptDaily.policies).reduce((s,r)=>s+r.count,0):0);
-    const avg = bookings ? revenue / bookings : 0;
-    // Global-only totals (no per-user breakdown tables yet)
-    const clients = Object.values(deptDaily.clients||{}).reduce((s,r)=>s+r.count,0);
-    const visas = Object.values(deptDaily.visas||{}).reduce((s,r)=>s+r.count,0);
-    const passports = Object.values(deptDaily.passports||{}).reduce((s,r)=>s+r.count,0);
-    const itineraries = Object.values(deptDaily.itineraries||{}).reduce((s,r)=>s+r.count,0);
-    return { bookings, revenue, policies, avg, clients, visas, passports, itineraries };
-  },[salesTrend, deptDaily, dataScope, metrics]);
+    const kpis = useMemo(()=> {
+      const bookings = salesTrend.reduce((s,r)=>s+r.bookings,0);
+      const bookingRevenue = salesTrend.reduce((s,r)=>s+r.revenue,0); // scope-aware booking revenue
+      const policyRevenueGlobal = Object.values(deptDaily.policies||{}).reduce((s:any,r:any)=>s+r.value,0);
+      const visaRevenueGlobal = Object.values(deptDaily.visas||{}).reduce((s:any,r:any)=>s+r.value,0);
+      const passportRevenueGlobal = Object.values(deptDaily.passports||{}).reduce((s:any,r:any)=>s+r.value,0);
+      const policyRevenue = (dataScope==='me' && metrics.length) ? 0 : policyRevenueGlobal;
+      const visaRevenue = (dataScope==='me' && metrics.length) ? 0 : visaRevenueGlobal;
+      const passportRevenue = (dataScope==='me' && metrics.length) ? 0 : passportRevenueGlobal;
+      const totalRevenue = bookingRevenue + policyRevenue + visaRevenue + passportRevenue;
+      const policies = (dataScope==='me' && metrics.length)
+        ? metrics.reduce((s,m)=>s+m.policies_count,0)
+        : (deptDaily.policies ? Object.values(deptDaily.policies).reduce((s,r)=>s+r.count,0):0);
+      const avg = bookings ? bookingRevenue / bookings : 0; // booking average
+      const clients = Object.values(deptDaily.clients||{}).reduce((s,r)=>s+r.count,0);
+      const visas = Object.values(deptDaily.visas||{}).reduce((s,r)=>s+r.count,0);
+      const passports = Object.values(deptDaily.passports||{}).reduce((s,r)=>s+r.count,0);
+      const itineraries = Object.values(deptDaily.itineraries||{}).reduce((s,r)=>s+r.count,0);
+      return { bookings, bookingRevenue, policyRevenue, visaRevenue, passportRevenue, totalRevenue, policies, avg, clients, visas, passports, itineraries };
+    },[salesTrend, deptDaily, dataScope, metrics]);
 
   const departmentSummary = useMemo(()=> [
     { label:'Clients Added', value: kpis.clients, color:'primary.main' },
     { label:'Bookings', value: kpis.bookings, color:'secondary.main' },
-    { label:'Revenue ($)', value: kpis.revenue.toFixed(2), color:'success.main' },
-    { label:'Policies', value: kpis.policies, color:'info.main' },
-    { label:'Visas', value: kpis.visas, color:'warning.main' },
-    { label:'Passports', value: kpis.passports, color:'error.main' },
+    { label:'Booking Revenue', value: kpis.bookingRevenue.toFixed(2), color:'success.main' },
+    { label:'Policy Revenue', value: kpis.policyRevenue.toFixed(2), color:'info.main' },
+    { label:'Visa Revenue', value: kpis.visaRevenue.toFixed(2), color:'warning.main' },
+    { label:'Passport Revenue', value: kpis.passportRevenue.toFixed(2), color:'error.main' },
+    { label:'Total Revenue', value: kpis.totalRevenue.toFixed(2), color:'success.dark' },
+    { label:'Policies', value: kpis.policies, color:'info.dark' },
+    { label:'Visas', value: kpis.visas, color:'warning.dark' },
+    { label:'Passports', value: kpis.passports, color:'error.dark' },
     { label:'Itineraries', value: kpis.itineraries, color:'text.primary' },
     { label:'Avg / Booking', value: kpis.avg.toFixed(2), color:'success.dark' }
   ], [kpis]);
@@ -279,10 +289,14 @@ const ProfilePage: React.FC = () => {
         write('KPIs (30 days):', { bold: true });
         const kpiPairs = [
           ['Bookings', String(kpis.bookings)],
-          ['Revenue', kpis.revenue.toFixed(2)],
+          ['Booking Revenue', kpis.bookingRevenue.toFixed(2)],
+          ['Policy Revenue', kpis.policyRevenue.toFixed(2)],
+          ['Visa Revenue', kpis.visaRevenue.toFixed(2)],
+          ['Passport Revenue', kpis.passportRevenue.toFixed(2)],
+          ['Total Revenue', kpis.totalRevenue.toFixed(2)],
           ['Policies', String(kpis.policies)],
           ['Avg / Booking', kpis.avg.toFixed(2)],
-          ['Clients Added', String(departmentSummary.find(d=>d.label==='Clients Added')?.value || 0)],
+          ['Clients Added', String(kpis.clients)],
           ['Visas', String(kpis.visas)],
           ['Passports', String(kpis.passports)],
           ['Itineraries', String(kpis.itineraries)]
@@ -475,7 +489,16 @@ const ProfilePage: React.FC = () => {
                 <Typography variant="caption" color="text.secondary">Scope: {(dataScope==='me' && metrics.length)?'My Data':'All Data'}{(dataScope==='me' && !metrics.length)?' (no user metrics, showing global)':''}</Typography>
               </Stack>
               <Grid container spacing={2}>
-                {[{label:(dataScope==='me' && metrics.length)?'My Bookings':'Bookings', val:kpis.bookings, color:'primary.main'}, {label:(dataScope==='me' && metrics.length)?'My Revenue':'Revenue', val:kpis.revenue.toFixed(2), color:'secondary.main'}, {label:(dataScope==='me' && metrics.length)?'My Policies':'Policies', val:kpis.policies, color:'info.main'}, {label:'Avg / Booking', val:kpis.avg.toFixed(2), color:'success.main'}].map(k => (
+                {[
+                  {label:(dataScope==='me' && metrics.length)?'My Bookings':'Bookings', val:kpis.bookings, color:'primary.main'},
+                  {label:(dataScope==='me' && metrics.length)?'My Booking Revenue':'Booking Revenue', val:kpis.bookingRevenue.toFixed(2), color:'secondary.main'},
+                  {label:'Policy Revenue', val:kpis.policyRevenue.toFixed(2), color:'info.main'},
+                  {label:'Visa Revenue', val:kpis.visaRevenue.toFixed(2), color:'warning.main'},
+                  {label:'Passport Revenue', val:kpis.passportRevenue.toFixed(2), color:'error.main'},
+                  {label:'Total Revenue', val:kpis.totalRevenue.toFixed(2), color:'success.main'},
+                  {label:(dataScope==='me' && metrics.length)?'My Policies':'Policies', val:kpis.policies, color:'info.dark'},
+                  {label:'Avg / Booking', val:kpis.avg.toFixed(2), color:'success.dark'}
+                ].map(k => (
                   <Grid item xs={12} key={k.label}>
                     <Box>
                       <Typography variant="caption" color="text.secondary">{k.label}</Typography>

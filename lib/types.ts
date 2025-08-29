@@ -61,6 +61,7 @@ export type Visa = {
   issue_date: string
   expiry_date: string
   notes: string
+  amount?: number
   created_at?: string
 }
 
@@ -74,6 +75,7 @@ export type Passport = {
   nationality: string
   issue_date: string
   expiry_date: string
+  amount?: number
   created_at?: string
 }
 

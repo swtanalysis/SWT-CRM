@@ -529,8 +529,8 @@ export default function DashboardPage() {
     switch (view) {
         case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
     case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', amount: 0, status: 'Confirmed', segments: [] };
-        case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', notes: '' };
-        case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: ''};
+    case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', amount: 0, notes: '' };
+    case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: '', amount: 0};
         case 'Policies': return { client_id: '', booking_id: '', policy_number: '', insurer: '', sum_insured: 0, start_date: '', end_date: '', premium_amount: 0 };
         default: return {};
     }
@@ -723,21 +723,17 @@ export default function DashboardPage() {
     }, [bookingData]);
     
     const topClientsByRevenue = useMemo(() => {
-        const clientSpend = bookingData.reduce((acc: Record<string, number>, booking: Booking) => {
-            if (booking.amount) {
-                acc[booking.client_id] = (acc[booking.client_id] || 0) + booking.amount;
-            }
-            return acc;
-        }, {});
-
-        return Object.entries(clientSpend)
-            .sort(([, a], [, b]) => (b as number) - (a as number))
-            .slice(0, 5)
-            .map(([clientId, totalSpend]) => ({
-                name: clientData.find((c: Client) => c.id === clientId)?.first_name || 'Unknown',
-                revenue: totalSpend,
-            }));
-    }, [bookingData, clientData]);
+        // Aggregate revenue across bookings, policies (premium), visas & passports (new amount fields)
+        const spend: Record<string, number> = {};
+        bookingData.forEach(b => { if (b.amount) spend[b.client_id] = (spend[b.client_id] || 0) + b.amount; });
+        policyData.forEach(p => { if (p.premium_amount) spend[p.client_id] = (spend[p.client_id] || 0) + p.premium_amount; });
+        visaData.forEach(v => { const anyV: any = v as any; if (anyV.amount) spend[v.client_id] = (spend[v.client_id] || 0) + Number(anyV.amount)||0; });
+        passportData.forEach(p => { const anyP: any = p as any; if (anyP.amount) spend[p.client_id] = (spend[p.client_id] || 0) + Number(anyP.amount)||0; });
+        return Object.entries(spend)
+            .sort((a,b)=> b[1]-a[1])
+            .slice(0,5)
+            .map(([clientId,total])=> ({ name: clientData.find(c=>c.id===clientId)?.first_name || 'Unknown', revenue: total }));
+    }, [bookingData, policyData, visaData, passportData, clientData]);
 
     const bookingStatusData = useMemo(() => {
         const statusCounts = bookingData.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
@@ -873,14 +869,20 @@ export default function DashboardPage() {
             };
         }, [userDailyMetrics, userActivity]);
 
-        const globalKpis = useMemo(()=> ({
-            bookings: bookingData.length,
-            revenue: bookingData.reduce((s,b)=> s + (b.amount||0),0),
-            policies: policyData.length,
-            visas: visaData.length,
-            passports: passportData.length,
-            clients: clientData.length
-        }), [bookingData, policyData, visaData, passportData, clientData]);
+        const globalKpis = useMemo(()=> {
+            const bookingRevenue = bookingData.reduce((s,b)=> s + (b.amount||0),0);
+            const policyRevenue = policyData.reduce((s,p)=> s + (p.premium_amount||0),0);
+            const visaRevenue = visaData.reduce((s,v)=> s + (Number((v as any).amount)||0),0);
+            const passportRevenue = passportData.reduce((s,p)=> s + (Number((p as any).amount)||0),0);
+            return {
+                bookings: bookingData.length,
+                revenue: bookingRevenue + policyRevenue + visaRevenue + passportRevenue,
+                policies: policyData.length,
+                visas: visaData.length,
+                passports: passportData.length,
+                clients: clientData.length
+            };
+        }, [bookingData, policyData, visaData, passportData, clientData]);
 
         const isUser = userMetricMode==='me';
         const activeKpis = isUser ? userKpis : globalKpis;
@@ -1976,7 +1978,11 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
         if (!selectedClient) return { totalSpend: 0, numTrips: 0, avgSpend: 0, destinations: [] };
         const bookings = clientData.bookings;
         const policies = clientData.policies;
-        const totalSpend = bookings.reduce((sum: any, b: { amount: any; }) => sum + (b.amount || 0), 0) + policies.reduce((sum: any, p: { premium_amount: any; }) => sum + (p.premium_amount || 0), 0);
+        const visas = clientData.visas;
+        const passports = clientData.passports;
+        const visaSpend = visas.reduce((s: number, v: any)=> s + (Number(v.amount)||0),0);
+        const passportSpend = passports.reduce((s: number, p: any)=> s + (Number(p.amount)||0),0);
+        const totalSpend = bookings.reduce((sum: any, b: { amount: any; }) => sum + (b.amount || 0), 0) + policies.reduce((sum: any, p: { premium_amount: any; }) => sum + (p.premium_amount || 0), 0) + visaSpend + passportSpend;
         const numTrips = bookings.length;
         const avgSpend = numTrips > 0 ? totalSpend / numTrips : 0;
         const destinationCounts = bookings.reduce((acc: { [x: string]: any; }, b: { destination: string | number; }) => {
@@ -1998,8 +2004,8 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     const getReminderIcon = (type: string) => ({ Birthday: <CakeIcon color="secondary" />, Passport: <CreditCardIcon color="error" />, Visa: <VpnKeyIcon color="error" />, Policy: <PolicyIcon color="error" />, Booking: <FlightIcon color="info" /> }[type] || <NotificationsIcon />);
 
     const bookingCols = [ {key: 'pnr', label: 'PNR'}, {key: 'destination', label: 'Destination'}, {key: 'check_in', label: 'Check-in', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'check_out', label: 'Check-out', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'amount', label: 'Amount', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'status', label: 'Status'}, ];
-    const visaCols = [ {key: 'country', label: 'Country'}, {key: 'visa_type', label: 'Type'}, {key: 'visa_number', label: 'Number'}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
-    const passportCols = [ {key: 'passport_number', label: 'Number'}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
+    const visaCols = [ {key: 'country', label: 'Country'}, {key: 'visa_type', label: 'Type'}, {key: 'visa_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
+    const passportCols = [ {key: 'passport_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
     const policyCols = [ {key: 'policy_number', label: 'Number'}, {key: 'insurer', label: 'Insurer'}, {key: 'sum_insured', label: 'Sum Insured', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'premium_amount', label: 'Premium', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'start_date', label: 'Start', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'end_date', label: 'End', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
 
     return (
