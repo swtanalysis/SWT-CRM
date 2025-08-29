@@ -74,7 +74,12 @@ const TableView = React.memo(({
     onDeleteItem, 
     onOpenDocModal,
     clients,
-    bookings
+    bookings,
+    dateFrom,
+    dateTo,
+    onDateFromChange,
+    onDateToChange,
+    onClearDates
 }: { 
     data: any[], 
     view: string, 
@@ -88,22 +93,34 @@ const TableView = React.memo(({
     onDeleteItem: (id: string, view: string) => void,
     onOpenDocModal: (client: Client) => void,
     clients: Client[],
-    bookings: Booking[]
+    bookings: Booking[],
+    dateFrom: dayjs.Dayjs | null,
+    dateTo: dayjs.Dayjs | null,
+    onDateFromChange: (d: dayjs.Dayjs | null) => void,
+    onDateToChange: (d: dayjs.Dayjs | null) => void,
+    onClearDates: () => void
 }) => (
     <Fade in={true}>
     <Paper sx={{ p: 2, mt: 2, elevation: 3, borderRadius: 2 }}>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} flexWrap="wrap" gap={2}>
+            <Box display="flex" justifyContent="space-between" alignItems="flex-end" mb={2} flexWrap="wrap" gap={2}>
         <Typography variant="h5" component="h2" sx={{ fontWeight: 'bold' }}>{view}</Typography>
-        <TextField 
-            label="Search All Columns" 
-            variant="outlined" 
-            size="small" 
-            value={searchTerm} 
-            onChange={e => onSearchTermChange(e.target.value)}
-            InputProps={{ startAdornment: (<InputAdornment position="start"><SearchIcon /></InputAdornment>) }} 
-            sx={{minWidth: '300px'}} 
-        />
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => onOpenModal('add')}>Add {view.slice(0, -1)}</Button>
+                <TextField 
+                    label="Search All Columns" 
+                    variant="outlined" 
+                    size="small" 
+                    value={searchTerm} 
+                    onChange={e => onSearchTermChange(e.target.value)}
+                    InputProps={{ startAdornment: (<InputAdornment position="start"><SearchIcon /></InputAdornment>) }} 
+                    sx={{minWidth: '240px'}} 
+                />
+                <LocalizationProvider dateAdapter={AdapterDayjs}>
+                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                        <DatePicker label="From" value={dateFrom} onChange={onDateFromChange} slotProps={{ textField: { size:'small' } }} />
+                        <DatePicker label="To" value={dateTo} onChange={onDateToChange} slotProps={{ textField: { size:'small' } }} />
+                        {(dateFrom || dateTo) && <Button size="small" onClick={onClearDates}>Clear</Button>}
+                        <Button variant="contained" startIcon={<AddIcon />} onClick={() => onOpenModal('add')}>Add {view.slice(0, -1)}</Button>
+                    </Stack>
+                </LocalizationProvider>
       </Box>
       <TableContainer sx={{ maxHeight: 'calc(100vh - 280px)' }}>
         <Table stickyHeader aria-label={`${view} table`}>
@@ -212,6 +229,9 @@ export default function DashboardPage() {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [filters, setFilters] = useState<Record<string, string>>({}); 
+    // Date range filter (applies to date-like columns)
+    const [dateFrom, setDateFrom] = useState<dayjs.Dayjs | null>(null);
+    const [dateTo, setDateTo] = useState<dayjs.Dayjs | null>(null);
   
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<{id: string, view: string} | null>(null);
@@ -225,6 +245,9 @@ export default function DashboardPage() {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [showReminders, setShowReminders] = useState(true);
   const actualLeftWidth = leftCollapsed ? 64 : drawerWidth;
+    // Hydration safety: defer dynamic/time-based rendering until client mounted
+    const [mounted, setMounted] = useState(false);
+    useEffect(()=> { setMounted(true); }, []);
 
     // --- USER ACTIVITY LOGGING ---
     const logActivity = async (action: string, entity: string, entityId?: string, meta?: any) => {
@@ -592,7 +615,31 @@ export default function DashboardPage() {
                 filtered = filtered.filter(item => includesText(item, lowercasedFilter) || matchesLinked(item, lowercasedFilter));
         }
 
-    filtered = filtered.filter(item => Object.entries(filters).every(([key, val]) => !val || String((item as any)[key]).toLowerCase().includes(val.toLowerCase())));
+        filtered = filtered.filter(item => Object.entries(filters).every(([key, val]) => !val || String((item as any)[key]).toLowerCase().includes(val.toLowerCase())));
+
+        // Date filtering: find candidate date fields per entity
+        const dateKeysPerView: Record<string,string[]> = {
+            Clients: ['created_at','dob'],
+            Bookings: ['check_in','check_out','created_at','departure_date'],
+            Visas: ['issue_date','expiry_date','created_at'],
+            Passports: ['issue_date','expiry_date','created_at'],
+            Policies: ['start_date','end_date','created_at']
+        };
+        const dk = dateKeysPerView[activeView] || [];
+        if (dateFrom || dateTo) {
+            filtered = filtered.filter(item => {
+                const anyItem: any = item;
+                return dk.some(k => {
+                    const raw = anyItem[k];
+                    if (!raw) return false;
+                    const d = dayjs(raw);
+                    if (!d.isValid()) return false;
+                    if (dateFrom && d.isBefore(dateFrom,'day')) return false;
+                    if (dateTo && d.isAfter(dateTo,'day')) return false;
+                    return true;
+                });
+            });
+        }
 
     if (sortColumn) {
         // Create a shallow copy before sorting to avoid mutating the original state
@@ -691,6 +738,11 @@ export default function DashboardPage() {
                 onOpenDocModal={handleOpenDocModal}
                 clients={clients}
                 bookings={bookings}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                onDateFromChange={setDateFrom}
+                onDateToChange={setDateTo}
+                onClearDates={()=>{ setDateFrom(null); setDateTo(null); }}
             />;
         default: return <Typography>Select a view</Typography>;
     }
@@ -1621,18 +1673,25 @@ export default function DashboardPage() {
                                 {drawer}
                         </Drawer>
                     </Box>
-                    <Box component="main" 
-                        sx={{ 
-                                flexGrow: 1, 
-                                p: 3, 
-                                bgcolor: '#f4f6f8', 
-                                minHeight: '100vh'
-                        }}>
-                        <Toolbar />
-                        <Container maxWidth="xl" sx={{ pt: 2, pb: 2 }}>
-                            {renderContent()}
-                        </Container>
-                    </Box>
+                                        <Box component="main" 
+                                                suppressHydrationWarning
+                                                sx={{ 
+                                                                flexGrow: 1, 
+                                                                p: 3, 
+                                                                bgcolor: '#f4f6f8', 
+                                                                minHeight: '100vh'
+                                                }}>
+                                                <Toolbar />
+                                                {mounted ? (
+                                                    <Container maxWidth="xl" sx={{ pt: 2, pb: 2 }}>
+                                                            {renderContent()}
+                                                    </Container>
+                                                ) : (
+                                                    <Container maxWidth="xl" sx={{ pt: 6, display:'flex', justifyContent:'center' }}>
+                                                        <CircularProgress />
+                                                    </Container>
+                                                )}
+                                        </Box>
                     {showReminders && <RightDrawer reminders={reminders} onReminderClick={handleReminderClick} />}
                     {openModal && <FormModal />}
                     {docModalOpen && <DocumentUploadModal onShowSnackbar={setSnackbar} />}

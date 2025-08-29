@@ -3,6 +3,9 @@ import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabaseClient';
 import { Profile, UserDailyMetrics, UserActivity } from '../../lib/types';
 import { Box, Tabs, Tab, Avatar, Typography, Grid, Paper, TextField, Button, Stack, Alert, Snackbar, AppBar, Toolbar, Container, CssBaseline, CircularProgress, FormControlLabel, Switch, Table, TableHead, TableRow, TableCell, TableBody, ToggleButtonGroup, ToggleButton, Divider } from '@mui/material';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, BarChart, Bar, AreaChart, Area } from 'recharts';
 import { Save as SaveIcon, CloudUpload as CloudUploadIcon, Security as SecurityIcon, Insights as InsightsIcon, History as HistoryIcon, Edit as EditIcon, ArrowBack as ArrowBackIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
 import jsPDF from 'jspdf';
@@ -11,6 +14,8 @@ import NextLink from 'next/link';
 import dayjs from 'dayjs';
 
 const ProfilePage: React.FC = () => {
+  const [mounted, setMounted] = useState(false);
+  useEffect(()=> { setMounted(true); },[]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [edit, setEdit] = useState(false);
   const [form, setForm] = useState<Partial<Profile>>({});
@@ -24,6 +29,7 @@ const ProfilePage: React.FC = () => {
   const [policies30, setPolicies30] = useState<any[]>([]);
   const [itineraries30, setItineraries30] = useState<any[]>([]);
   const [activity, setActivity] = useState<UserActivity[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   // Removed API keys feature as requested
   const [snackbar, setSnackbar] = useState<{open:boolean; message:string; severity?:'success'|'error'|'info'|'warning'}>({open:false, message:''});
   const [loading, setLoading] = useState(true);
@@ -32,9 +38,18 @@ const ProfilePage: React.FC = () => {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<any>(null);
   const reportRef = useRef<HTMLDivElement | null>(null);
-  const [dataScope, setDataScope] = useState<'me'|'all'>('me');
-  // Load saved scope preference
-  useEffect(()=>{ try { const s = localStorage.getItem('profile_scope'); if (s==='me'||s==='all') setDataScope(s); } catch {}; },[]);
+  const [dataScope, setDataScope] = useState<'me'|'all'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const s = localStorage.getItem('profile_scope');
+        if (s === 'me' || s === 'all') return s;
+      } catch {}
+    }
+    return 'me';
+  });
+  // Date filters for Sales Metrics daily table
+  const [salesFrom, setSalesFrom] = useState<dayjs.Dayjs | null>(null);
+  const [salesTo, setSalesTo] = useState<dayjs.Dayjs | null>(null);
   useEffect(()=>{ try { localStorage.setItem('profile_scope', dataScope); } catch {}; },[dataScope]);
 
   // Auth bootstrap (avoid race where getUser returns null briefly)
@@ -111,11 +126,48 @@ const ProfilePage: React.FC = () => {
       if (pp.data) setPassports30(pp.data);
       if (pl.data) setPolicies30(pl.data);
       if (it.data) setItineraries30(it.data);
-      const { data: acts } = await supabase.from('user_activity').select('*').eq('user_id', authUser.id).order('created_at',{ ascending:false }).limit(50);
-      if (acts) setActivity(acts as any);
   // API keys removed
     })();
   }, [authUser, ensureProfile]);
+
+  // Activity fetch (top-level hooks)
+  const activityLoadedRef = useRef(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const fetchUserActivity = useCallback(async (force?: boolean) => {
+    if (!authUser?.id) return;
+    if (!force && (activityLoading || activityLoadedRef.current)) return;
+    setActivityLoading(true);
+    setActivityError(null);
+    try {
+      const base = supabase.from('user_activity').select('*').eq('user_id', authUser.id).order('created_at',{ascending:false}).limit(200);
+      const { data, error } = await base;
+      if (error) {
+        setActivityError(error.message);
+      }
+      let rows = data || [];
+      if ((!rows || !rows.length) && !error) {
+        // optional broad fetch for diagnostics
+        const broad = await supabase.from('user_activity').select('*').order('created_at',{ascending:false}).limit(200);
+        if (!broad.error && broad.data) {
+          rows = (broad.data as any[]).filter(r=> r.user_id === authUser.id);
+        }
+      }
+      if (rows && rows.length) {
+        setActivity(rows as any);
+      } else if (!error) {
+        setActivity([]);
+      }
+      activityLoadedRef.current = true;
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [authUser]);
+
+  // Adjust for removed tab (Productivity). Ensure activity (now index 2) loads once.
+  useEffect(() => {
+    if (tab > 2) { setTab(2); return; }
+    if (tab === 2) fetchUserActivity();
+  }, [tab, fetchUserActivity]);
 
   const handleSave = async () => {
     if (!profile) return;
@@ -210,23 +262,62 @@ const ProfilePage: React.FC = () => {
   // Build user & global sales trends; pick via scope
   const userSalesTrend = useMemo(()=> last30Days.map(d => {
     const m = metrics.find(x=>x.date===d);
-    return { date: d.slice(5), bookings: m?.bookings_count||0, revenue: m? Number(m.revenue_sum||0):0, avg: m? Number(m.avg_booking_value||0):0 };
+    const bookingRevenue = m? Number(m.revenue_sum||0):0;
+    return {
+      date: d.slice(5),
+      isoDate: d,
+      bookings: m?.bookings_count||0,
+      bookingRevenue,
+      policyRevenue: 0,
+      visaRevenue: 0,
+      passportRevenue: 0,
+      totalRevenue: bookingRevenue,
+      revenue: bookingRevenue, // backward compatibility
+      avg: m? Number(m.avg_booking_value||0):0
+    };
   }), [metrics, last30Days]);
   const globalSalesTrend = useMemo(()=> last30Days.map(d => {
-    const g = deptDaily.bookings[d];
-    return { date: d.slice(5), bookings: g?.count||0, revenue: g?.value||0, avg: g && g.count? (g.value / g.count):0 };
+    const b = deptDaily.bookings[d];
+    const p = deptDaily.policies[d];
+    const v = deptDaily.visas[d];
+    const pp = deptDaily.passports[d];
+    const bookingRevenue = b?.value||0;
+    const policyRevenue = p?.value||0;
+    const visaRevenue = v?.value||0;
+    const passportRevenue = pp?.value||0;
+    const totalRevenue = bookingRevenue + policyRevenue + visaRevenue + passportRevenue;
+    const bookings = b?.count||0;
+    return {
+      date: d.slice(5),
+      isoDate: d,
+      bookings,
+      bookingRevenue,
+      policyRevenue,
+      visaRevenue,
+      passportRevenue,
+      totalRevenue,
+      revenue: totalRevenue,
+      avg: bookings ? (bookingRevenue / bookings) : 0
+    };
   }), [deptDaily, last30Days]);
   const salesTrend = (dataScope==='me' && metrics.length) ? userSalesTrend : globalSalesTrend;
+  // Filtered sales trend for daily table (does not affect overview chart to preserve 30d visuals)
+  const filteredSalesTrend = useMemo(()=> {
+    if (!salesFrom && !salesTo) return salesTrend;
+    return salesTrend.filter(r => {
+      const d = dayjs(r.isoDate ? r.isoDate : dayjs().year() + '-' + r.date);
+      if (salesFrom && d.isBefore(salesFrom, 'day')) return false;
+      if (salesTo && d.isAfter(salesTo, 'day')) return false;
+      return true;
+    });
+  }, [salesTrend, salesFrom, salesTo]);
 
-  // Productivity chart uses user metrics (tasks + response time)
-  const productivityTrend = useMemo(()=> last30Days.map(d=> {
-    const m = metrics.find(x=>x.date===d);
-    return { date: d.slice(5), tasks: m?.tasks_completed||0, responseMin: m? (m.response_time_avg_ms/60000):0 };
-  }), [metrics, last30Days]);
+  // Productivity metrics removed (tab deleted)
 
     const kpis = useMemo(()=> {
       const bookings = salesTrend.reduce((s,r)=>s+r.bookings,0);
-      const bookingRevenue = salesTrend.reduce((s,r)=>s+r.revenue,0); // scope-aware booking revenue
+      // IMPORTANT: use r.bookingRevenue (pure booking-only) not r.revenue (which may be totalRevenue for global scope)
+      const bookingRevenue = salesTrend.reduce((s,r)=>s+(r.bookingRevenue||0),0);
       const policyRevenueGlobal = Object.values(deptDaily.policies||{}).reduce((s:any,r:any)=>s+r.value,0);
       const visaRevenueGlobal = Object.values(deptDaily.visas||{}).reduce((s:any,r:any)=>s+r.value,0);
       const passportRevenueGlobal = Object.values(deptDaily.passports||{}).reduce((s:any,r:any)=>s+r.value,0);
@@ -304,18 +395,11 @@ const ProfilePage: React.FC = () => {
         kpiPairs.forEach(([k,v]) => write(`${k}: ${v}`));
         y += 2; pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
         // Sales Trend Table (last 14 days)
-        write('Sales Trend (Last 14 days):', { bold: true });
-        write('Date  | Bookings | Revenue | Avg');
-        salesTrend.slice(-14).forEach(r => write(`${r.date.padEnd(5)} | ${String(r.bookings).padEnd(8)} | ${Number(r.revenue).toFixed(0).padStart(7)} | ${Number(r.avg).toFixed(0)}`));
+  write('Sales Trend (Last 14 days):', { bold: true });
+  write('Date  | Bkgs | BookRev | PolRev | VisaRev | PassRev | TotalRev | AvgBk');
+  salesTrend.slice(-14).forEach(r => write(`${r.date.padEnd(5)} | ${String(r.bookings).padStart(4)} | ${Number(r.bookingRevenue||0).toFixed(0).padStart(7)} | ${Number(r.policyRevenue||0).toFixed(0).padStart(7)} | ${Number(r.visaRevenue||0).toFixed(0).padStart(7)} | ${Number(r.passportRevenue||0).toFixed(0).padStart(7)} | ${Number(r.totalRevenue||r.revenue||0).toFixed(0).padStart(8)} | ${Number(r.avg||0).toFixed(0)}`));
         y += 2; pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
-        // Productivity summary (if any tasks recorded)
-        const recentProd = productivityTrend.slice(-14);
-        if (recentProd.some(r=>r.tasks || r.responseMin)) {
-          write('Productivity (Last 14 days):', { bold: true });
-          write('Date  | Tasks | Avg Resp (m)');
-          recentProd.forEach(r => write(`${r.date.padEnd(5)} | ${String(r.tasks).padEnd(5)} | ${r.responseMin.toFixed(2)}`));
-          y += 2; pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
-        }
+  // Productivity section removed
         // Recent Activity
         if (activity.length) {
           write('Recent Activity (max 20):', { bold: true });
@@ -424,7 +508,10 @@ const ProfilePage: React.FC = () => {
           {edit && <Button color="inherit" startIcon={<SaveIcon />} onClick={handleSave}>Save</Button>}
         </Toolbar>
       </AppBar>
-  <Container maxWidth="xl" sx={{ py: 3, flexGrow:1 }} ref={reportRef}>
+  <Container suppressHydrationWarning maxWidth="xl" sx={{ py: 3, flexGrow:1 }} ref={reportRef}>
+        {!mounted ? (
+          <Box sx={{ display:'flex', justifyContent:'center', alignItems:'center', height:'40vh' }}><CircularProgress /></Box>
+        ) : (
         <Grid container spacing={3}>
           <Grid item xs={12}>
             <Paper elevation={3} sx={{ p:3, borderRadius:2 }}>
@@ -472,7 +559,6 @@ const ProfilePage: React.FC = () => {
             <Tabs value={tab} onChange={(e,v)=>setTab(v)} variant="scrollable" allowScrollButtonsMobile sx={{ flexGrow:1 }}>
               <Tab label="Overview" icon={<InsightsIcon />} iconPosition="start" />
               <Tab label="Sales" icon={<InsightsIcon />} iconPosition="start" />
-              <Tab label="Productivity" icon={<SecurityIcon />} iconPosition="start" />
               <Tab label="Activity" icon={<HistoryIcon />} iconPosition="start" />
             </Tabs>
             <Button onClick={handleDownloadReport} startIcon={<PictureAsPdfIcon />} size="small" variant="outlined" sx={{ whiteSpace:'nowrap' }}>Download PDF</Button>
@@ -522,11 +608,21 @@ const ProfilePage: React.FC = () => {
                     <XAxis dataKey="date" tick={{ fontSize:12 }} />
                     <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize:12 }} />
                     <YAxis yAxisId="right" orientation="right" tick={{ fontSize:12 }} />
-                    <RechartsTooltip formatter={(val:any, name:any)=> name==='revenue'? [`$${Number(val).toFixed(0)}`,'Revenue']: val } />
+                    <RechartsTooltip formatter={(val:any, name:any)=> {
+                      if (['bookingRevenue','policyRevenue','visaRevenue','passportRevenue','totalRevenue','revenue','avg'].includes(name)) {
+                        if (name==='avg') return [`$${Number(val).toFixed(0)}`,'Avg Booking'];
+                        return [`$${Number(val).toFixed(0)}`, name.replace(/([A-Z])/g,' $1').replace(/^./,(c: string)=>c.toUpperCase())];
+                      }
+                      return val;
+                    }} />
                     <Legend />
                     <Line yAxisId="left" type="monotone" dataKey="bookings" stroke="#1976d2" strokeWidth={2} dot={false} name="Bookings" />
-                    <Line yAxisId="right" type="monotone" dataKey="revenue" stroke="#9c27b0" strokeWidth={2} dot={false} name="Revenue" />
-                    <Line yAxisId="right" type="monotone" dataKey="avg" stroke="#2e7d32" strokeDasharray="4 3" strokeWidth={2} dot={false} name="Avg Value" />
+                    <Line yAxisId="right" type="monotone" dataKey="bookingRevenue" stroke="#9c27b0" strokeWidth={2} dot={false} name="Booking Revenue" />
+                    <Line yAxisId="right" type="monotone" dataKey="policyRevenue" stroke="#ff9800" strokeWidth={2} dot={false} name="Policy Revenue" />
+                    <Line yAxisId="right" type="monotone" dataKey="visaRevenue" stroke="#4caf50" strokeWidth={2} dot={false} name="Visa Revenue" />
+                    <Line yAxisId="right" type="monotone" dataKey="passportRevenue" stroke="#f44336" strokeWidth={2} dot={false} name="Passport Revenue" />
+                    <Line yAxisId="right" type="monotone" dataKey="totalRevenue" stroke="#673ab7" strokeDasharray="4 3" strokeWidth={2} dot={false} name="Total Revenue" />
+                    <Line yAxisId="right" type="monotone" dataKey="avg" stroke="#2e7d32" strokeDasharray="2 4" strokeWidth={2} dot={false} name="Avg Booking" />
                   </LineChart>
                 </ResponsiveContainer>
               </Box>
@@ -550,92 +646,83 @@ const ProfilePage: React.FC = () => {
       {tab === 1 && (
         <Paper elevation={3} sx={{ p:3, borderRadius:2 }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb:1 }}>
-            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight:600, mb:0 }}>Sales Metrics (Daily)</Typography>
-            {(dataScope==='me' && !metrics.length) && <Typography variant="caption" color="warning.main">No user metrics found for last 30d • global shown</Typography>}
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight:600, mb:0 }}>Sales Metrics (Daily) – All Departments</Typography>
+            {(dataScope==='me' && metrics.length) && <Typography variant="caption" color="text.secondary">User scope: non-booking revenues = 0 (not tracked per-user yet)</Typography>}
+            {(dataScope==='me' && !metrics.length) && <Typography variant="caption" color="warning.main">No user metrics • global shown</Typography>}
           </Stack>
+          <LocalizationProvider dateAdapter={AdapterDayjs}>
+            <Stack direction={{ xs:'column', sm:'row' }} spacing={2} alignItems={{ xs:'stretch', sm:'center' }} sx={{ mb:2 }}>
+              <DatePicker label="From" value={salesFrom} onChange={setSalesFrom} slotProps={{ textField: { size:'small' } }} />
+              <DatePicker label="To" value={salesTo} onChange={setSalesTo} slotProps={{ textField: { size:'small' } }} />
+              {(salesFrom || salesTo) && <Button size="small" onClick={()=>{ setSalesFrom(null); setSalesTo(null); }}>Clear</Button>}
+              <Typography variant="caption" color="text.secondary" sx={{ ml:'auto' }}>{filteredSalesTrend.length} day(s)</Typography>
+            </Stack>
+          </LocalizationProvider>
           <Table size="small">
-            <TableHead><TableRow><TableCell>Date</TableCell><TableCell>Bookings</TableCell><TableCell>Revenue</TableCell><TableCell>Policies</TableCell><TableCell>Avg Value</TableCell></TableRow></TableHead>
+            <TableHead>
+              <TableRow>
+                <TableCell>Date</TableCell>
+                <TableCell>Bookings</TableCell>
+                <TableCell align="right">Booking Rev</TableCell>
+                <TableCell align="right">Policy Rev</TableCell>
+                <TableCell align="right">Visa Rev</TableCell>
+                <TableCell align="right">Passport Rev</TableCell>
+                <TableCell align="right">Total Rev</TableCell>
+                <TableCell align="right">Avg Book Val</TableCell>
+              </TableRow>
+            </TableHead>
             <TableBody>
-              {metrics.map(m => (
-                <TableRow key={m.date}><TableCell>{m.date}</TableCell><TableCell>{m.bookings_count}</TableCell><TableCell>{Number(m.revenue_sum).toFixed(2)}</TableCell><TableCell>{m.policies_count}</TableCell><TableCell>{Number(m.avg_booking_value).toFixed(2)}</TableCell></TableRow>
+              {filteredSalesTrend.map(r => (
+                <TableRow key={r.date}>
+                  <TableCell>{r.date}</TableCell>
+                  <TableCell>{r.bookings}</TableCell>
+                  <TableCell align="right">{Number(r.bookingRevenue||0).toFixed(2)}</TableCell>
+                  <TableCell align="right">{Number(r.policyRevenue||0).toFixed(2)}</TableCell>
+                  <TableCell align="right">{Number(r.visaRevenue||0).toFixed(2)}</TableCell>
+                  <TableCell align="right">{Number(r.passportRevenue||0).toFixed(2)}</TableCell>
+                  <TableCell align="right">{Number(r.totalRevenue||r.revenue||0).toFixed(2)}</TableCell>
+                  <TableCell align="right">{Number(r.avg||0).toFixed(2)}</TableCell>
+                </TableRow>
               ))}
-              {!metrics.length && <TableRow><TableCell colSpan={5} align="center">No metrics</TableCell></TableRow>}
+              {!filteredSalesTrend.length && <TableRow><TableCell colSpan={8} align="center">No data</TableCell></TableRow>}
             </TableBody>
           </Table>
         </Paper>
       )}
 
-      {tab === 2 && (
+  {tab === 2 && (
         <Paper elevation={3} sx={{ p:3, borderRadius:2 }}>
-          <Typography variant="subtitle2" gutterBottom sx={{ fontWeight:600 }}>Productivity (30d)</Typography>
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={8}>
-              <Box sx={{ height:260 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={productivityTrend} margin={{ top:5, right:30, left:0, bottom:0 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tick={{ fontSize:12 }} />
-                    <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize:12 }} />
-                    <YAxis yAxisId="right" orientation="right" tickFormatter={(v)=>`${v.toFixed(1)}m`} tick={{ fontSize:12 }} />
-                    <RechartsTooltip formatter={(val:any, name:any)=> name==='responseMin'? [`${Number(val).toFixed(2)}m`, 'Avg Response'] : val } />
-                    <Legend />
-                    <Area yAxisId="left" type="monotone" dataKey="tasks" stroke="#1976d2" fill="#1976d2" fillOpacity={0.15} name="Tasks Completed" />
-                    <Line yAxisId="right" type="monotone" dataKey="responseMin" stroke="#ef6c00" strokeWidth={2} dot={false} name="Avg Response (m)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </Box>
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <Grid container spacing={2}>
-                {['tasks','responseMin'].map(key => {
-                  const latest = productivityTrend[productivityTrend.length-1] || { tasks:0, responseMin:0 };
-                  const label = key==='tasks'? 'Tasks (Latest Day)': 'Avg Response (m)';
-                  const val = key==='tasks'? latest.tasks : latest.responseMin.toFixed(2);
-                  return (
-                    <Grid item xs={6} md={12} key={key}>
-                      <Box sx={{ p:2, border:'1px solid', borderColor:'divider', borderRadius:1 }}>
-                        <Typography variant="caption" color="text.secondary">{label}</Typography>
-                        <Typography variant="h6" sx={{ fontWeight:700 }}>{val}</Typography>
-                      </Box>
-                    </Grid>
-                  );
-                })}
-                <Grid item xs={12}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell sx={{ fontSize:12 }}>Date</TableCell>
-                        <TableCell sx={{ fontSize:12 }}>Tasks</TableCell>
-                        <TableCell sx={{ fontSize:12 }}>Resp (m)</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {productivityTrend.slice(-7).map(r => (
-                        <TableRow key={r.date}>
-                          <TableCell sx={{ fontSize:12 }}>{r.date}</TableCell>
-                          <TableCell sx={{ fontSize:12 }}>{r.tasks}</TableCell>
-                          <TableCell sx={{ fontSize:12 }}>{r.responseMin.toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Grid>
-              </Grid>
-            </Grid>
-          </Grid>
-        </Paper>
-      )}
-
-      {tab === 3 && (
-        <Paper elevation={3} sx={{ p:3, borderRadius:2 }}>
-          <Typography variant="subtitle2" gutterBottom sx={{ fontWeight:600 }}>Recent Activity</Typography>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb:2 }}>
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight:600, mb:0 }}>Recent Activity</Typography>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button size="small" variant="outlined" onClick={()=>fetchUserActivity(true)} disabled={activityLoading}>{activityLoading ? 'Loading...' : 'Refresh'}</Button>
+              <Typography variant="caption" color="text.secondary">{activity.length} event{activity.length!==1?'s':''}</Typography>
+            </Stack>
+          </Stack>
           <Table size="small">
-            <TableHead><TableRow><TableCell>Time</TableCell><TableCell>Action</TableCell><TableCell>Entity</TableCell><TableCell>Details</TableCell></TableRow></TableHead>
+            <TableHead>
+              <TableRow>
+                <TableCell>Time</TableCell>
+                <TableCell>Action</TableCell>
+                <TableCell>Entity</TableCell>
+                <TableCell>Details</TableCell>
+              </TableRow>
+            </TableHead>
             <TableBody>
               {activity.map(a => (
-                <TableRow key={a.id}><TableCell>{dayjs(a.created_at).format('YYYY-MM-DD HH:mm')}</TableCell><TableCell>{a.action}</TableCell><TableCell>{a.entity_type}</TableCell><TableCell>{a.meta ? JSON.stringify(a.meta) : ''}</TableCell></TableRow>
+                <TableRow key={a.id} hover>
+                  <TableCell>{dayjs(a.created_at).format('YYYY-MM-DD HH:mm')}</TableCell>
+                  <TableCell>{a.action}</TableCell>
+                  <TableCell>{a.entity_type}</TableCell>
+                  <TableCell>{a.meta ? JSON.stringify(a.meta) : ''}</TableCell>
+                </TableRow>
               ))}
-              {!activity.length && <TableRow><TableCell colSpan={4} align="center">No activity</TableCell></TableRow>}
+              {!activityLoading && !activity.length && (
+                <TableRow><TableCell colSpan={4} align="center">No activity found for this user.</TableCell></TableRow>
+              )}
+              {activityLoading && (
+                <TableRow><TableCell colSpan={4} align="center"><CircularProgress size={24} /></TableCell></TableRow>
+              )}
             </TableBody>
           </Table>
         </Paper>
@@ -645,7 +732,8 @@ const ProfilePage: React.FC = () => {
               </Box>
             </Paper>
           </Grid>
-        </Grid>
+  </Grid>
+  )}
       </Container>
       <Snackbar open={snackbar.open} autoHideDuration={5000} onClose={()=>setSnackbar(s=>({...s,open:false}))}><Alert severity={snackbar.severity||'info'}>{snackbar.message}</Alert></Snackbar>
     </Box>
