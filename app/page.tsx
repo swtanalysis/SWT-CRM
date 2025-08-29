@@ -1,19 +1,22 @@
+// Ensure this page is rendered purely on the client to avoid SSR hydration mismatches for time-based charts
 'use client'
 
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import type { UserDailyMetrics, UserActivity } from '../lib/types';
 import type { Client, Booking, Visa, Passport, Policy, Reminder } from '../lib/types'
 import { createClient, Session } from '@supabase/supabase-js'
 import {
-  Box, CssBaseline, AppBar, Toolbar, Typography, Container, Paper, CircularProgress,
-  IconButton, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,
-  Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Alert,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Fade, InputAdornment,
-  Select, MenuItem, FormControl, InputLabel, Stack, Link,
-  Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar,
-  Checkbox, FormControlLabel,
-  Collapse,
-    Badge,
-    Autocomplete
+    Box, CssBaseline, AppBar, Toolbar, Typography, Container, Paper, CircularProgress,
+    IconButton, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,
+    Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Alert,
+    Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Fade, InputAdornment,
+    Select, MenuItem, FormControl, InputLabel, Stack, Link,
+    Accordion, AccordionSummary, AccordionDetails, Avatar, Chip, Tabs, Tab, Snackbar,
+    Checkbox, FormControlLabel,
+        Collapse,
+        Badge,
+        Autocomplete,
+        ToggleButtonGroup, ToggleButton
 } from '@mui/material'
 import { Grid } from '@mui/material';
 import dynamic from 'next/dynamic';
@@ -175,16 +178,22 @@ const TableView = React.memo(({
 TableView.displayName = 'TableView';
 
 export default function DashboardPage() {
+    // Stable reference timestamp to avoid server/client divergence for month labels etc.
+    const nowRef = useRef(dayjs());
   // --- STATE MANAGEMENT ---
   const [session, setSession] = useState<Session | null>(null);
   // Track last successful fetch to prevent unnecessary refetches on focus/visibility
   const lastFetchRef = useRef<number>(0);
   const sessionRef = useRef<Session | null>(null);
-  const [clients, setClients] = useState<Client[]>([])
+    const [clients, setClients] = useState<Client[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
   const [visas, setVisas] = useState<Visa[]>([])
   const [passports, setPassports] = useState<Passport[]>([])
-  const [policies, setPolicies] = useState<Policy[]>([])
+    const [policies, setPolicies] = useState<Policy[]>([])
+    // User-specific metrics state
+    const [userDailyMetrics, setUserDailyMetrics] = useState<UserDailyMetrics[]>([]);
+    const [userActivity, setUserActivity] = useState<UserActivity[]>([]);
+    const [userMetricMode, setUserMetricMode] = useState<'all' | 'me'>('all');
   const [clientNotes, setClientNotes] = useState<ClientNote[]>([])
   
   const [loading, setLoading] = useState(true)
@@ -251,7 +260,22 @@ export default function DashboardPage() {
     return () => {
       if (subscription) subscription.unsubscribe()
     }
-  }, [])
+    }, [])
+
+    // Fetch per-user metrics & activity (30d window)
+    useEffect(() => {
+        const loadUserMetrics = async () => {
+            if (!session?.user?.id) return;
+            const since = dayjs().subtract(30,'day').format('YYYY-MM-DD');
+            // user daily metrics (pre-aggregated if available)
+            const { data: udm } = await supabase.from('user_metrics_daily').select('*').eq('user_id', session.user.id).gte('date', since).order('date');
+            if (udm) setUserDailyMetrics(udm as any);
+            // raw activity for fallback / extended metrics
+            const { data: acts } = await supabase.from('user_activity').select('*').eq('user_id', session.user.id).gte('created_at', since).order('created_at', { ascending:false }).limit(500);
+            if (acts) setUserActivity(acts as any);
+        };
+        loadUserMetrics();
+    }, [session]);
 
   // --- DEBOUNCING SEARCH INPUT ---
   useEffect(() => {
@@ -307,6 +331,17 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+    // Persist user/global metric mode preference
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem('dashboard_metric_mode');
+            if (saved === 'me' || saved === 'all') setUserMetricMode(saved);
+        } catch {}
+    }, []);
+    useEffect(() => {
+        try { localStorage.setItem('dashboard_metric_mode', userMetricMode); } catch {}
+    }, [userMetricMode]);
 
   // Refetch on focus/visibility only when data is stale and no modal is open
   useEffect(() => {
@@ -630,7 +665,11 @@ export default function DashboardPage() {
     if (error) return <Alert severity="error">{error}</Alert>;
 
     switch (activeView) {
-        case 'Dashboard': return <DashboardView stats={{clients: clients.length, bookings: bookings.length}} clientData={clients} bookingData={bookings} policyData={policies} visaData={visas} passportData={passports} globalReminders={reminders} />;
+                case 'Dashboard': return <DashboardView 
+                    stats={{clients: clients.length, bookings: bookings.length}}
+                    clientData={clients} bookingData={bookings} policyData={policies} visaData={visas} passportData={passports} globalReminders={reminders}
+                    userDailyMetrics={userDailyMetrics} userActivity={userActivity} userMetricMode={userMetricMode} onMetricModeChange={setUserMetricMode}
+                />;
     case 'Client Insight': return <ClientInsightView allClients={clients} allBookings={bookings} allVisas={visas} allPassports={passports} allPolicies={policies} allNotes={clientNotes} globalReminders={reminders} onUpdate={fetchData} onShowSnackbar={setSnackbar} onOpenModal={handleOpenModal} onDeleteItem={handleDeleteItem} />;
     case 'Itineraries': return <ItinerariesView clients={clients} />;
         case 'Clients': 
@@ -657,7 +696,7 @@ export default function DashboardPage() {
     }
   };
 
-  const DashboardView = ({ stats, clientData, bookingData, policyData, visaData, passportData, globalReminders }: { stats: any, clientData: Client[], bookingData: Booking[], policyData: Policy[], visaData: Visa[], passportData: Passport[], globalReminders: Reminder[] }) => {
+    const DashboardView = ({ stats, clientData, bookingData, policyData, visaData, passportData, globalReminders, userDailyMetrics, userActivity, userMetricMode, onMetricModeChange }: { stats: any, clientData: Client[], bookingData: Booking[], policyData: Policy[], visaData: Visa[], passportData: Passport[], globalReminders: Reminder[], userDailyMetrics: UserDailyMetrics[], userActivity: UserActivity[], userMetricMode: 'all' | 'me', onMetricModeChange: (m:'all'|'me')=>void }) => {
     const [opportunityTab, setOpportunityTab] = useState(0);
 
     const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
@@ -676,7 +715,9 @@ export default function DashboardPage() {
     }, [clientData]);
 
     const bookingsByMonthData = useMemo(() => {
-        const counts = Array(12).fill(0).map((_, i) => ({ name: dayjs().month(i).format('MMM'), bookings: 0 }));
+        // Use stable ref timestamp so SSR vs CSR doesn't mismatch (hydration safety)
+        const base = nowRef.current;
+        const counts = Array(12).fill(0).map((_, i) => ({ name: base.month(i).format('MMM'), bookings: 0 }));
         bookingData.forEach((b: Booking) => { const m = dayjs(b.check_in).month(); if(m>=0) counts[m].bookings++; });
         return counts;
     }, [bookingData]);
@@ -815,36 +856,89 @@ export default function DashboardPage() {
         return globalReminders.filter((r: Reminder) => r.type !== 'Birthday' && r.days_left! <= 30 && r.days_left! >=0).length;
     }, [globalReminders]);
     
-    return (
+        // Aggregate user-specific KPIs (30d)
+        const userKpis = useMemo(() => {
+            if (userDailyMetrics && userDailyMetrics.length) {
+                const bookings = userDailyMetrics.reduce((s,m)=>s+m.bookings_count,0);
+                const revenue = userDailyMetrics.reduce((s,m)=>s+Number(m.revenue_sum||0),0);
+                const policiesCount = userDailyMetrics.reduce((s,m)=>s+m.policies_count,0);
+                return { bookings, revenue, policies: policiesCount };
+            }
+            // Fallback derive from activity (counts of create actions)
+            const byEntity = (entity:string) => userActivity.filter(a=>a.action==='create' && a.entity_type===entity).length;
+            return {
+                bookings: byEntity('bookings'),
+                revenue: 0, // cannot infer without amount snapshot
+                policies: byEntity('policies')
+            };
+        }, [userDailyMetrics, userActivity]);
+
+        const globalKpis = useMemo(()=> ({
+            bookings: bookingData.length,
+            revenue: bookingData.reduce((s,b)=> s + (b.amount||0),0),
+            policies: policyData.length,
+            visas: visaData.length,
+            passports: passportData.length,
+            clients: clientData.length
+        }), [bookingData, policyData, visaData, passportData, clientData]);
+
+        const isUser = userMetricMode==='me';
+        const activeKpis = isUser ? userKpis : globalKpis;
+        return (
         <Fade in={true}>
         <Grid container spacing={3}>
             {/* Key Metrics */}
             <Grid item xs={12}>
-                <Grid container spacing={3}>
+                                <Grid container spacing={3} alignItems="stretch">
+                                        {/* Toggle moved to AppBar for better visibility */}
                     <Grid item xs={12} sm={6} md={3}>
                         <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
-                            <Typography variant="h6" color="text.secondary" gutterBottom>Total Clients</Typography>
-                            <Typography variant="h4" color="primary.main" sx={{fontWeight: 'bold'}}>{stats.clients}</Typography>
+                                                        <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'My Bookings (30d)':'Total Clients'}</Typography>
+                                                        <Typography variant="h4" color="primary.main" sx={{fontWeight: 'bold'}}>{isUser ? activeKpis.bookings : stats.clients}</Typography>
                         </Paper>
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
                         <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
-                            <Typography variant="h6" color="text.secondary" gutterBottom>Active Bookings</Typography>
-                            <Typography variant="h4" color="secondary.main" sx={{fontWeight: 'bold'}}>{stats.bookings}</Typography>
+                                                        <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'My Revenue (30d)':'Active Bookings'}</Typography>
+                                                        <Typography variant="h4" color="secondary.main" sx={{fontWeight: 'bold'}}>{isUser ? (activeKpis.revenue||0).toFixed(0) : stats.bookings}</Typography>
                         </Paper>
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
                         <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
-                            <Typography variant="h6" color="text.secondary" gutterBottom>Avg. Trip Duration</Typography>
-                            <Typography variant="h4" color="info.main" sx={{fontWeight: 'bold'}}>{avgTripDuration} Days</Typography>
+                                                        <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'My Policies (30d)':'Avg. Trip Duration'}</Typography>
+                                                        <Typography variant="h4" color="info.main" sx={{fontWeight: 'bold'}}>{isUser ? activeKpis.policies : `${avgTripDuration} Days`}</Typography>
                         </Paper>
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
                         <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
-                            <Typography variant="h6" color="text.secondary" gutterBottom>Expiring Soon</Typography>
-                            <Typography variant="h4" color="error.main" sx={{fontWeight: 'bold'}}>{expiringRemindersCount}</Typography>
+                                                        <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'Mode':'Expiring Soon'}</Typography>
+                                                        <Typography variant="h4" color="error.main" sx={{fontWeight: 'bold'}}>{isUser? 'Me':'All'}</Typography>
                         </Paper>
                     </Grid>
+                    {/* Added department KPIs */}
+                    <Grid item xs={12} sm={6} md={3}>
+                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
+                            <Typography variant="h6" color="text.secondary" gutterBottom>Policies</Typography>
+                            <Typography variant="h4" color="warning.main" sx={{fontWeight:'bold'}}>{policyData.length}</Typography>
+                        </Paper>
+                    </Grid>
+                    <Grid item xs={12} sm={6} md={3}>
+                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
+                            <Typography variant="h6" color="text.secondary" gutterBottom>Visas</Typography>
+                            <Typography variant="h4" color="success.main" sx={{fontWeight:'bold'}}>{visaData.length}</Typography>
+                        </Paper>
+                    </Grid>
+                    <Grid item xs={12} sm={6} md={3}>
+                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
+                            <Typography variant="h6" color="text.secondary" gutterBottom>Passports</Typography>
+                            <Typography variant="h4" color="info.main" sx={{fontWeight:'bold'}}>{passportData.length}</Typography>
+                        </Paper>
+                    </Grid>
+                                        {isUser && (
+                                            <Grid item xs={12}>
+                                                <Typography variant="caption" color="text.secondary">Showing metrics for your activity over last 30 days. Switch back to "All Data" to view organization-wide KPIs.</Typography>
+                                            </Grid>
+                                        )}
                 </Grid>
             </Grid>
             
@@ -1490,6 +1584,19 @@ export default function DashboardPage() {
                         <Toolbar>
                             <IconButton color="inherit" edge="start" onClick={handleDrawerToggle} sx={{ mr: 2, display: { sm: 'none' } }}><MenuIcon /></IconButton>
                             <Typography variant="h6" noWrap component="div" sx={{flexGrow: 1}}>{activeView}</Typography>
+                            {activeView === 'Dashboard' && (
+                                <ToggleButtonGroup
+                                    exclusive
+                                    size="small"
+                                    color="secondary"
+                                    value={userMetricMode}
+                                    onChange={(_e, val) => val && setUserMetricMode(val)}
+                                    sx={{ mr: 2, bgcolor: 'rgba(255,255,255,0.1)', borderRadius: 2 }}
+                                >
+                                    <ToggleButton value="all" sx={{ color: 'white', '&.Mui-selected': { bgcolor: 'secondary.main', color: 'white' } }}>All Data</ToggleButton>
+                                    <ToggleButton value="me" sx={{ color: 'white', '&.Mui-selected': { bgcolor: 'secondary.main', color: 'white' } }}>My Data</ToggleButton>
+                                </ToggleButtonGroup>
+                            )}
                             <Tooltip title="Profile">
                                 <IconButton color="inherit" component={NextLink} href="/profile" sx={{ mr: 1 }}>
                                     <PersonIcon />
