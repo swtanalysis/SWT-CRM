@@ -9,7 +9,6 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, BarChart, Bar, AreaChart, Area } from 'recharts';
 import { Save as SaveIcon, CloudUpload as CloudUploadIcon, Security as SecurityIcon, Insights as InsightsIcon, History as HistoryIcon, Edit as EditIcon, ArrowBack as ArrowBackIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 import NextLink from 'next/link';
 import dayjs from 'dayjs';
 import { DISPLAY_DATE, DISPLAY_DATE_TIME } from '../../lib/dateFormats';
@@ -362,119 +361,66 @@ const ProfilePage: React.FC = () => {
     <TextField size="small" label={label} value={(form as any)[name] || ''} type={type} onChange={e=>setForm(f=>({...f,[name]:e.target.value}))} fullWidth disabled={!edit} />
   );
 
-  const handleDownloadReport = async () => {
-    const buildStructuredPdf = () => {
-      try {
-        const pdf = new jsPDF('p','mm','a4');
-        const lineHeight = 6;
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const marginX = 10;
-        let y = 12;
-        const write = (text: string, opts: { bold?: boolean; color?: [number,number,number] } = {}) => {
-          if (y > 280) { pdf.addPage(); y = 12; }
-          if (opts.bold) pdf.setFont(undefined,'bold'); else pdf.setFont(undefined,'normal');
-            if (opts.color) pdf.setTextColor(...opts.color); else pdf.setTextColor(20,20,20);
-          pdf.text(text, marginX, y, { maxWidth: pageWidth - marginX*2 });
-          y += lineHeight;
-        };
-        // Header
-        pdf.setFontSize(16); write(`Profile Analytics Report`, { bold: true });
-        pdf.setFontSize(11); write(`User: ${fullName}`);
-        write(`Scope: ${ dataScope==='me' ? 'My Data' : 'All Data' }`);
-        write(`Generated: ${dayjs().format(DISPLAY_DATE_TIME)}`);
-        y += 2; pdf.setDrawColor(180); pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
-        // KPIs
-        write('KPIs (30 days):', { bold: true });
-        const kpiPairs = [
-          ['Bookings', String(kpis.bookings)],
-          ['Booking Revenue', kpis.bookingRevenue.toFixed(2)],
-          ['Policy Revenue', kpis.policyRevenue.toFixed(2)],
-          ['Visa Revenue', kpis.visaRevenue.toFixed(2)],
-          ['Passport Revenue', kpis.passportRevenue.toFixed(2)],
-          ['Total Revenue', kpis.totalRevenue.toFixed(2)],
-          ['Policies', String(kpis.policies)],
-          ['Avg / Booking', kpis.avg.toFixed(2)],
-          ['Clients Added', String(kpis.clients)],
-          ['Visas', String(kpis.visas)],
-          ['Passports', String(kpis.passports)],
-          ['Itineraries', String(kpis.itineraries)]
-        ];
-        kpiPairs.forEach(([k,v]) => write(`${k}: ${v}`));
-        y += 2; pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
-        // Sales Trend Table (last 14 days)
-        write('Sales Trend (Last 14 days):', { bold: true });
-        write('Date   | Bkgs | BookRev | PolRev | VisaRev | PassRev | TotalRev | AvgBk');
-        salesTrend.slice(-14).forEach(r => write(`${dayjs(r.isoDate).format('DD/MM').padEnd(6)} | ${String(r.bookings).padStart(4)} | ${Number(r.bookingRevenue||0).toFixed(0).padStart(7)} | ${Number(r.policyRevenue||0).toFixed(0).padStart(7)} | ${Number(r.visaRevenue||0).toFixed(0).padStart(7)} | ${Number(r.passportRevenue||0).toFixed(0).padStart(7)} | ${Number(r.totalRevenue||r.revenue||0).toFixed(0).padStart(8)} | ${Number(r.avg||0).toFixed(0)}`));
-        y += 2; pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
-        // Recent Activity
-        if (activity.length) {
-          write('Recent Activity (max 20):', { bold: true });
-          activity.slice(0,20).forEach(a => write(`${dayjs(a.created_at).format('DD/MM/YYYY HH:mm')}  ${a.action} ${a.entity_type}`));
-        }
-        pdf.save(`profile-analytics-${fullName.replace(/\s+/g,'-').toLowerCase()}.pdf`);
-        setSnackbar({open:true,message:'Report downloaded (fallback)',severity:'success'});
-      } catch (err:any) {
-        setSnackbar({open:true,message:`Fallback PDF failed: ${err.message||err}`,severity:'error'});
-      }
-    };
-
+  const handleDownloadReport = () => {
     try {
-      const node = reportRef.current;
-      if (!node) { setSnackbar({open:true,message:'Report element not found',severity:'error'}); return; }
-      setSnackbar({open:true,message:'Generating PDF report...',severity:'info'});
-      // Clone & sanitize to avoid unsupported CSS color() functions
-      const clone = node.cloneNode(true) as HTMLElement;
-      // Remove any style attributes using color( functions that html2canvas cannot parse
-      clone.querySelectorAll('*').forEach(el => {
-        const style = (el as HTMLElement).getAttribute('style') || '';
-        if (/color\(/i.test(style)) (el as HTMLElement).setAttribute('style', style.replace(/color\([^)]*\)/gi,'#1976d2'));
-      });
-      // Offscreen container
-      const temp = document.createElement('div');
-      temp.style.position = 'fixed'; temp.style.left='-5000px'; temp.style.top='0'; temp.style.background='#fff'; temp.appendChild(clone);
-      document.body.appendChild(temp);
-      try {
-        const canvas = await html2canvas(clone, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p','mm','a4');
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        const imgWidth = pageWidth - 10;
-        const imgHeight = canvas.height * imgWidth / canvas.width;
-        if (imgHeight <= pageHeight - 10) {
-          pdf.addImage(imgData,'PNG',5,5,imgWidth,imgHeight,'','FAST');
-        } else {
-          // paginate by slicing vertical segments
-          let position = 0;
-          const pageCanvas = document.createElement('canvas');
-          const ctx = pageCanvas.getContext('2d');
-          const ratio = canvas.width / imgWidth; // px per mm
-          const sliceHeightPx = (pageHeight - 10) * ratio;
-          pageCanvas.width = canvas.width;
-          pageCanvas.height = sliceHeightPx;
-          while (position < canvas.height) {
-            const remaining = Math.min(sliceHeightPx, canvas.height - position);
-            if (ctx) {
-              ctx.clearRect(0,0,pageCanvas.width,pageCanvas.height);
-              ctx.drawImage(canvas, 0, position, canvas.width, remaining, 0, 0, canvas.width, remaining);
-              const sliceData = pageCanvas.toDataURL('image/png');
-              pdf.addImage(sliceData,'PNG',5,5,imgWidth,(remaining/ratio),'','FAST');
-              position += remaining;
-              if (position < canvas.height) pdf.addPage();
-            } else break;
-          }
-        }
-        pdf.save(`profile-analytics-${fullName.replace(/\s+/g,'-').toLowerCase()}.pdf`);
-      } finally {
-        document.body.removeChild(temp);
+      const pdf = new jsPDF('p','mm','a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 12;
+      const primary = '#2bcba8';
+      const primaryDark = '#178f77';
+      const header = () => {
+        pdf.setFillColor(43,203,168); pdf.rect(0,0,pageWidth,18,'F');
+        pdf.setFont('helvetica','bold'); pdf.setFontSize(14); pdf.setTextColor('#04352c');
+        pdf.text('Profile Analytics Report', margin, 12);
+      };
+      const footer = (page: number) => {
+        pdf.setFontSize(9); pdf.setTextColor(primaryDark);
+        pdf.text(`Page ${page}`, pageWidth - margin - 20, pageHeight - 6);
+        pdf.text(dayjs().format('DD/MM/YYYY HH:mm'), margin, pageHeight - 6);
+      };
+      let page = 1; header(); footer(page);
+      let y = 26;
+      const lineGap = 5;
+      const addSection = (title: string) => {
+        if (y > pageHeight - 30) { pdf.addPage(); header(); footer(++page); y = 26; }
+        pdf.setFillColor(217,246,239); pdf.roundedRect(margin, y-4, pageWidth - margin*2, 8, 2,2,'F');
+        pdf.setFontSize(11); pdf.setFont('helvetica','bold'); pdf.setTextColor(primaryDark); pdf.text(title, margin + 2, y+1);
+        y += lineGap + 2; pdf.setFont('helvetica','normal'); pdf.setFontSize(10); pdf.setTextColor('#094f43');
+      };
+  const writeLine = (t: string) => { const lines = pdf.splitTextToSize(t, pageWidth - margin*2) as string[]; lines.forEach((l: string) => { if (y > pageHeight - 15) { pdf.addPage(); header(); footer(++page); y = 26; } pdf.text(l, margin, y); y += 4; }); };
+      // Summary
+      writeLine(`User: ${fullName}`);
+      writeLine(`Scope: ${dataScope==='me' ? 'My Data' : 'All Data'}`);
+      writeLine(`Generated: ${dayjs().format(DISPLAY_DATE_TIME)}`);
+      y += 2;
+      addSection('KPIs (30 Days)');
+      const kpiEntries: [string,string][] = [
+        ['Bookings', String(kpis.bookings)],
+        ['Booking Revenue', kpis.bookingRevenue.toFixed(2)],
+        ['Policy Revenue', kpis.policyRevenue.toFixed(2)],
+        ['Visa Revenue', kpis.visaRevenue.toFixed(2)],
+        ['Passport Revenue', kpis.passportRevenue.toFixed(2)],
+        ['Total Revenue', kpis.totalRevenue.toFixed(2)],
+        ['Policies', String(kpis.policies)],
+        ['Avg / Booking', kpis.avg.toFixed(2)],
+        ['Clients Added', String(kpis.clients)],
+        ['Visas', String(kpis.visas)],
+        ['Passports', String(kpis.passports)],
+        ['Itineraries', String(kpis.itineraries)]
+      ];
+      kpiEntries.forEach(([k,v]) => writeLine(`${k}: ${v}`));
+      addSection('Sales Trend (Last 14 Days)');
+      writeLine('Date  | Bkgs | BookRev | PolRev | VisaRev | PassRev | Total | Avg');
+      salesTrend.slice(-14).forEach(r => writeLine(`${dayjs(r.isoDate).format('DD/MM')} | ${r.bookings} | ${Number(r.bookingRevenue||0).toFixed(0)} | ${Number(r.policyRevenue||0).toFixed(0)} | ${Number(r.visaRevenue||0).toFixed(0)} | ${Number(r.passportRevenue||0).toFixed(0)} | ${Number(r.totalRevenue||r.revenue||0).toFixed(0)} | ${Number(r.avg||0).toFixed(0)}`));
+      if (activity.length) {
+        addSection('Recent Activity (max 20)');
+        activity.slice(0,20).forEach(a => writeLine(`${dayjs(a.created_at).format('DD/MM/YYYY HH:mm')}  ${a.action} ${a.entity_type}`));
       }
-    } catch (e:any) {
-      if (String(e?.message||e).includes('unsupported color function')) {
-        // Fallback structured PDF without DOM rendering
-        buildStructuredPdf();
-      } else {
-        setSnackbar({open:true,message:`PDF failed: ${e.message||e}`,severity:'error'});
-      }
+      pdf.save(`profile-analytics-${fullName.replace(/\s+/g,'-').toLowerCase()}.pdf`);
+      setSnackbar({ open:true, message:'PDF downloaded', severity:'success' });
+    } catch (err: any) {
+      setSnackbar({ open:true, message:`PDF failed: ${err.message||err}`, severity:'error' });
     }
   };
 

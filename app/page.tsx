@@ -46,7 +46,7 @@ import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import jsPDF from 'jspdf'
-import html2canvas from 'html2canvas'
+// Removed html2canvas usage for structured PDF exports
 import { Divider } from '@mui/material';
 
 dayjs.extend(relativeTime)
@@ -2216,30 +2216,67 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     };
 
     const handleDownloadPdf = () => {
-        const expandBefore = showDetails;
-        if (!expandBefore) setShowDetails(true);
-        // allow DOM to paint expanded content before capture
-        setTimeout(() => {
-            const insightContent = document.getElementById('insight-content');
-            if (insightContent) {
-                onShowSnackbar({ open: true, message: 'Generating PDF...' });
-                html2canvas(insightContent).then(canvas => {
-                    const imgData = canvas.toDataURL('image/png');
-                    const pdf = new jsPDF('p', 'mm', 'a4');
-                    const pdfWidth = pdf.internal.pageSize.getWidth();
-                    const canvasWidth = canvas.width;
-                    const canvasHeight = canvas.height;
-                    const ratio = canvasWidth / canvasHeight;
-                    const width = pdfWidth;
-                    const height = width / ratio;
-                    pdf.addImage(imgData, 'PNG', 0, 0, width, height);
-                    pdf.save(`client-insight-${selectedClient?.first_name}-${selectedClient?.last_name}.pdf`);
-                    if (!expandBefore) setShowDetails(false);
-                });
-            } else if (!expandBefore) {
-                setShowDetails(false);
+        if (!selectedClient) return;
+        try {
+            onShowSnackbar({ open:true, message:'Building PDF...' });
+            const pdf = new jsPDF('p','mm','a4');
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+            const margin = 12;
+            const primary = '#2bcba8';
+            const primaryDark = '#178f77';
+            const header = () => {
+                pdf.setFillColor(43,203,168); pdf.rect(0,0,pageWidth,18,'F');
+                pdf.setFont('helvetica','bold'); pdf.setFontSize(14); pdf.setTextColor('#04352c');
+                pdf.text('Client Insight', margin, 12);
+            };
+            const footer = (page: number) => { pdf.setFontSize(9); pdf.setTextColor(primaryDark); pdf.text(`Page ${page}`, pageWidth - margin - 20, pageHeight - 6); pdf.text(dayjs().format('DD/MM/YYYY HH:mm'), margin, pageHeight - 6); };
+            let page = 1; header(); footer(page);
+            let y = 26;
+            const ensureSpace = (needed = 20) => { if (y > pageHeight - needed) { pdf.addPage(); header(); footer(++page); y = 26; } };
+            const section = (title: string) => { ensureSpace(); pdf.setFillColor(217,246,239); pdf.roundedRect(margin, y-4, pageWidth - margin*2, 8, 2,2,'F'); pdf.setFontSize(11); pdf.setFont('helvetica','bold'); pdf.setTextColor(primaryDark); pdf.text(title, margin+2, y+1); y += 7; pdf.setFont('helvetica','normal'); pdf.setFontSize(10); pdf.setTextColor('#094f43'); };
+            const line = (t: string) => { const parts = pdf.splitTextToSize(t, pageWidth - margin*2) as string[]; parts.forEach(pt => { ensureSpace(15); pdf.text(pt, margin, y); y += 4; }); };
+            // Basic info
+            section('Client');
+            line(`Name: ${selectedClient.first_name||''} ${selectedClient.last_name||''}`);
+            const scAny: any = selectedClient as any;
+            if (scAny.email) line(`Email: ${scAny.email}`);
+            if (scAny.phone) line(`Phone: ${scAny.phone}`);
+            if ((selectedClient as any).date_of_birth) line(`DOB: ${dayjs((selectedClient as any).date_of_birth).isValid() ? dayjs((selectedClient as any).date_of_birth).format(DISPLAY_DATE) : (selectedClient as any).date_of_birth}`);
+            // Summary analytics
+            const bookings = clientData.bookings||[]; const policies = clientData.policies||[]; const visas = clientData.visas||[]; const passports = clientData.passports||[];
+            const visaSpend = visas.reduce((s: number,v:any)=> s + (Number(v.amount)||0),0);
+            const passportSpend = passports.reduce((s: number,v:any)=> s + (Number(v.amount)||0),0);
+            const totalSpend = bookings.reduce((s:number,b:any)=> s + (Number(b.amount)||0),0) + policies.reduce((s:number,p:any)=> s + (Number(p.premium_amount)||0),0) + visaSpend + passportSpend;
+            const numTrips = bookings.length; const avgSpend = numTrips ? totalSpend / numTrips : 0;
+            section('Summary');
+            line(`Total Spend: Rs ${totalSpend.toFixed(2)}`);
+            line(`Trips: ${numTrips}`);
+            line(`Average Spend / Trip: Rs ${avgSpend.toFixed(2)}`);
+            // Bookings detail
+            if (bookings.length) {
+                section(`Bookings (${bookings.length})`);
+                bookings.forEach((b:any, idx:number) => { ensureSpace(); line(`${idx+1}. ${b.reference||'Ref'} | ${b.destination||'Destination'} | ${b.amount ? 'Rs '+Number(b.amount).toFixed(2):'0.00'} | ${b.start_date ? dayjs(b.start_date).format(DISPLAY_DATE):''}`); });
             }
-        }, 60);
+            if (visas.length) {
+                section(`Visas (${visas.length})`); visas.forEach((v:any,i:number)=> line(`${i+1}. ${v.country||'Country'} | Rs ${Number(v.amount||0).toFixed(2)} | ${v.status||''}`));
+            }
+            if (passports.length) {
+                section(`Passports (${passports.length})`); passports.forEach((p:any,i:number)=> line(`${i+1}. ${p.passport_number||'Passport'} | Rs ${Number(p.amount||0).toFixed(2)} | ${p.status||''}`));
+            }
+            if (policies.length) {
+                section(`Policies (${policies.length})`); policies.forEach((p:any,i:number)=> line(`${i+1}. ${p.policy_number||'Policy'} | Rs ${Number(p.premium_amount||0).toFixed(2)} | ${p.status||''}`));
+            }
+            // Notes
+            if ((clientData.notes||[]).length) {
+                section(`Notes (${clientData.notes.length})`);
+                clientData.notes.slice(0,40).forEach((n:any,i:number)=> line(`${i+1}. ${dayjs(n.created_at).format(DISPLAY_DATE_TIME)} - ${n.note?.slice(0,140)}`));
+            }
+            pdf.save(`client-insight-${selectedClient.first_name||''}-${selectedClient.last_name||''}.pdf`);
+            onShowSnackbar({ open:true, message:'PDF downloaded' });
+        } catch (err:any) {
+            onShowSnackbar({ open:true, message:`PDF failed: ${err.message||err}` });
+        }
     };
 
     const analytics = useMemo(() => {

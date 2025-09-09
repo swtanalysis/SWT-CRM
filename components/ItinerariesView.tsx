@@ -12,7 +12,6 @@ import Autocomplete from '@mui/material/Autocomplete';
 import dayjs from 'dayjs';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { DISPLAY_DATE } from '../lib/dateFormats';
-import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
 interface Props { clients: Client[]; }
@@ -275,34 +274,118 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
 
   const exportPdf = () => {
     if (!selected) return;
-    // Use comprehensive hidden printable container
-    const node = document.getElementById('itinerary-print-full');
-    if (!node) return;
-    setSnackbar({open:true, message:'Generating PDF...', severity:'info'});
-    setTimeout(()=>{
-      html2canvas(node as HTMLElement, { scale: 2 }).then(canvas => {
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p','mm','a4');
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        const imgWidth = pageWidth;
-        const imgHeight = canvas.height * imgWidth / canvas.width;
-        let heightLeft = imgHeight;
-        let position = 0;
-        pdf.addImage(imgData,'PNG',0,position,imgWidth,imgHeight);
-        heightLeft -= pageHeight;
-        while (heightLeft > 0) {
-          position -= pageHeight;
-            pdf.addPage();
-            pdf.addImage(imgData,'PNG',0,position,imgWidth,imgHeight);
-            heightLeft -= pageHeight;
-        }
-        pdf.save(`${selected.title.replace(/\s+/g,'-').toLowerCase()}.pdf`);
-        setSnackbar({open:true, message:'PDF downloaded', severity:'success'});
-      }).catch(err => {
-        setSnackbar({open:true, message:`PDF failed: ${err.message||err}`, severity:'error'});
+    try {
+      setSnackbar({ open:true, message:'Building PDF...', severity:'info' });
+      const pdf = new jsPDF('p','mm','a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 12;
+      const themePrimary = '#2bcba8';
+      const themeDark = '#178f77';
+
+      const addHeader = (title: string) => {
+        pdf.setFillColor(43,203,168); // mint primary
+        pdf.rect(0,0,pageWidth,18,'F');
+        pdf.setTextColor('#04352c');
+        pdf.setFontSize(14);
+        pdf.setFont('helvetica','bold');
+        pdf.text(title, margin, 12);
+        pdf.setDrawColor(themeDark);
+      };
+      const addFooter = (pageNo: number) => {
+        pdf.setFontSize(9);
+        pdf.setTextColor('#178f77');
+        pdf.text(`Page ${pageNo}`, pageWidth - margin - 20, pageHeight - 6);
+        pdf.setTextColor('#094f43');
+        pdf.text(dayjs().format('DD/MM/YYYY HH:mm'), margin, pageHeight - 6);
+      };
+
+      let page = 1;
+      addHeader(selected.title);
+      addFooter(page);
+      pdf.setFontSize(10);
+      pdf.setTextColor('#094f43');
+      pdf.setFont('helvetica','normal');
+      let cursorY = 26;
+
+      const lineGap = 5;
+      const sectionTitle = (text: string) => {
+        if (cursorY > pageHeight - 30) { pdf.addPage(); addHeader(selected.title); addFooter(++page); cursorY = 26; }
+        pdf.setFillColor(217,246,239);
+        pdf.setDrawColor(themePrimary);
+        pdf.setLineWidth(0.3);
+        pdf.roundedRect(margin, cursorY-4, pageWidth - margin*2, 8, 2,2,'F');
+        pdf.setFontSize(11); pdf.setFont('helvetica','bold'); pdf.setTextColor(themeDark);
+        pdf.text(text, margin + 2, cursorY+1);
+        pdf.setFont('helvetica','normal'); pdf.setFontSize(10); pdf.setTextColor('#094f43');
+        cursorY += lineGap + 2;
+      };
+
+      // Summary top block
+      const summaryBlock = [
+        `Dates: ${dayjs(selected.start_date).format('DD/MM/YYYY')} - ${dayjs(selected.end_date).format('DD/MM/YYYY')}`,
+        `Travelers: ${selected.travelers}`,
+        `Status: ${selected.status}`,
+        selected.client_id ? `Client: ${clients.find(c=>c.id===selected.client_id)?.first_name || ''} ${clients.find(c=>c.id===selected.client_id)?.last_name || ''}` : ''
+      ].filter(Boolean);
+      summaryBlock.forEach(line => {
+        if (cursorY > pageHeight - 20) { pdf.addPage(); addHeader(selected.title); addFooter(++page); cursorY = 26; }
+        pdf.text(line, margin, cursorY); cursorY += lineGap;
       });
-    },30);
+      cursorY += 2;
+
+      // Day by Day section
+      sectionTitle('Day by Day');
+      selected.days.forEach(d => {
+        if (cursorY > pageHeight - 30) { pdf.addPage(); addHeader(selected.title); addFooter(++page); cursorY = 26; sectionTitle('Day by Day (cont.)'); }
+        pdf.setFont('helvetica','bold');
+        pdf.text(dayjs(d.date).format('dddd, DD MMM YYYY'), margin, cursorY);
+        pdf.setFont('helvetica','normal');
+        cursorY += lineGap;
+        const acts = d.activities || [];
+        if (!acts.length) { pdf.setTextColor('#666666'); pdf.text('No activities', margin+2, cursorY); pdf.setTextColor('#094f43'); cursorY += lineGap; }
+        acts.forEach(a => {
+          if (cursorY > pageHeight - 20) { pdf.addPage(); addHeader(selected.title); addFooter(++page); cursorY = 26; }
+            const time = a.time || '--:--';
+            const type = a.type || 'Activity';
+            const desc = a.description || 'No description';
+            const loc = a.location ? ` @ ${a.location}` : '';
+            const cost = (a.cost || 0) ? ` - ${selected.currency} ${(a.cost||0).toFixed(2)}` : '';
+            const line = `${time} | ${type} | ${desc}${loc}${cost}`;
+            const split = pdf.splitTextToSize(line, pageWidth - margin*2);
+            split.forEach((l: string) => {
+              if (cursorY > pageHeight - 15) { pdf.addPage(); addHeader(selected.title); addFooter(++page); cursorY = 26; }
+              pdf.text(l, margin+2, cursorY); cursorY += 4.2;
+            });
+            cursorY += 1;
+        });
+        cursorY += 2;
+      });
+
+      // Pricing Summary
+      sectionTitle('Pricing Summary');
+      const entries = Object.entries(costSummary.byType);
+      const col1 = margin + 2;
+      const col2 = pageWidth - margin - 40;
+      pdf.setFont('helvetica','bold'); pdf.text('Type', col1, cursorY); pdf.text('Amount', col2, cursorY); pdf.setFont('helvetica','normal'); cursorY += lineGap - 1;
+      entries.forEach(([t,v]) => {
+        if (cursorY > pageHeight - 25) { pdf.addPage(); addHeader(selected.title); addFooter(++page); cursorY = 26; sectionTitle('Pricing Summary (cont.)'); pdf.setFont('helvetica','bold'); pdf.text('Type', col1, cursorY); pdf.text('Amount', col2, cursorY); pdf.setFont('helvetica','normal'); cursorY += lineGap - 1; }
+        pdf.text(t, col1, cursorY); pdf.text(`${selected.currency} ${v.toFixed(2)}`, col2, cursorY, { align:'left' }); cursorY += 4.5;
+      });
+      cursorY += 2;
+      pdf.setDrawColor(themePrimary);
+      pdf.setLineWidth(0.3);
+      pdf.line(margin, cursorY, pageWidth - margin, cursorY); cursorY += 5;
+      pdf.setFont('helvetica','bold');
+      pdf.text('Total:', col1, cursorY); pdf.text(`${selected.currency} ${costSummary.total.toFixed(2)}`, col2, cursorY); cursorY += 5;
+      pdf.setFont('helvetica','normal');
+      pdf.text('Per Traveler:', col1, cursorY); pdf.text(`${selected.currency} ${costSummary.perTraveler.toFixed(2)}`, col2, cursorY);
+
+      pdf.save(`${selected.title.replace(/\s+/g,'-').toLowerCase()}.pdf`);
+      setSnackbar({ open:true, message:'PDF downloaded', severity:'success' });
+    } catch (err: any) {
+      setSnackbar({ open:true, message:`PDF failed: ${err.message||err}`, severity:'error' });
+    }
   };
 
   const templateItineraries = useMemo(()=> itineraries.filter(i => (i as any).is_template), [itineraries]);
@@ -494,45 +577,7 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
             </Box>
           )}
         </Paper>
-        {/* Hidden printable full itinerary (all tabs) */}
-        {selected && (
-          <Box id="itinerary-print-full" sx={{ position:'absolute', top:-99999, left:-99999, width: 800, bgcolor:'#fff', color:'#000', p:3, fontSize:12 }}>
-            <Typography variant="h5" sx={{ fontWeight:'bold', mb:1 }}>{selected.title}</Typography>
-            <Typography variant="subtitle2" sx={{ mb:2 }}>
-              {dayjs(selected.start_date).format('MMM D, YYYY')} - {dayjs(selected.end_date).format('MMM D, YYYY')} | Travelers: {selected.travelers} | Status: {selected.status}
-            </Typography>
-            {selected.client_id && (
-              <Typography sx={{ mb:2 }}>Client: {clients.find(c=>c.id===selected.client_id)?.first_name} {clients.find(c=>c.id===selected.client_id)?.last_name}</Typography>
-            )}
-            <Typography variant="h6" sx={{ mt:1, mb:1 }}>Day By Day</Typography>
-            {selected.days.map(d => (
-              <Box key={d.date} sx={{ mb:1.5 }}>
-                <Typography sx={{ fontWeight:'bold' }}>{dayjs(d.date).format('dddd, MMM D')}</Typography>
-                {(d.activities||[]).length === 0 && <Typography variant="body2" color="text.secondary">No activities</Typography>}
-                {(d.activities||[]).map(a => (
-                  <Box key={a.id} sx={{ pl:1, borderLeft:'2px solid #666', mb:0.5 }}>
-                    <Typography variant="body2"><strong>{a.time||'--:--'}</strong> | {a.type} | {a.description || 'No description'} {a.location ? `@ ${a.location}`:''} { (a.cost || 0) ? `- ${selected.currency} ${(a.cost||0).toFixed(2)}`:'' }</Typography>
-                  </Box>
-                ))}
-              </Box>
-            ))}
-            <Divider sx={{ my:2 }} />
-            <Typography variant="h6" sx={{ mb:1 }}>Pricing Summary</Typography>
-            <Box>
-              {Object.entries(costSummary.byType).map(([t,v]) => (
-                <Box key={t} sx={{ display:'flex', justifyContent:'space-between', fontSize:12 }}>
-                  <span>{t}</span><span>{selected.currency} {v.toFixed(2)}</span>
-                </Box>
-              ))}
-              <Box sx={{ mt:1, display:'flex', justifyContent:'space-between', fontWeight:'bold', fontSize:13 }}>
-                <span>Total</span><span>{selected.currency} {costSummary.total.toFixed(2)}</span>
-              </Box>
-              <Box sx={{ display:'flex', justifyContent:'space-between', fontSize:12 }}>
-                <span>Per Traveler</span><span>{selected.currency} {costSummary.perTraveler.toFixed(2)}</span>
-              </Box>
-            </Box>
-          </Box>
-        )}
+  {/* Removed legacy hidden screenshot container for PDF export */}
       </Grid>
 
       <Dialog open={showNewDialog} onClose={()=>setShowNewDialog(false)} maxWidth="sm" fullWidth>
