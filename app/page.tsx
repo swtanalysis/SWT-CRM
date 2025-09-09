@@ -602,6 +602,42 @@ export default function DashboardPage() {
     // Potentially reset activeView if it was overridden for the modal, or keep it as is
     // For now, keep it as is, as the user might want to remain in Client Insight.
   };
+    // Persist minimal modal state so we can auto-reopen after a full page reload (e.g. dev Fast Refresh)
+    useEffect(()=> {
+        try {
+            if (openModal) {
+                localStorage.setItem('pending_modal_state', JSON.stringify({ view: activeView, mode: modalMode, ts: Date.now() }));
+            } else {
+                localStorage.removeItem('pending_modal_state');
+            }
+        } catch {}
+    }, [openModal, activeView, modalMode]);
+    // On initial mount, if there was a pending modal state with a recent timestamp and a draft exists, auto-reopen
+    useEffect(()=> {
+        try {
+            const raw = localStorage.getItem('pending_modal_state');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.view && parsed.mode && typeof parsed.ts === 'number') {
+                    // Only restore if within last 6 hours
+                    if (Date.now() - parsed.ts < 1000 * 60 * 60 * 6) {
+                        // Check that a draft exists for add mode, or if edit mode we still attempt restore
+                        const draftKey = `draft_${(parsed.view==='Client Insight' ? 'Clients' : parsed.view).toLowerCase()}_${parsed.mode}`;
+                        const hasDraft = !!localStorage.getItem(draftKey);
+                        if (parsed.mode === 'edit' || hasDraft) {
+                            setActiveView(parsed.view);
+                            setModalMode(parsed.mode);
+                            // Defer open to next tick so state setters apply first
+                            setTimeout(()=> setOpenModal(true), 0);
+                            console.debug('[Dashboard] Auto-reopening modal after reload', parsed);
+                        }
+                    } else {
+                        localStorage.removeItem('pending_modal_state');
+                    }
+                }
+            }
+        } catch {}
+    }, []);
   const handleOpenDocModal = (client: Client) => {
     setSelectedClientForDocs(client);
     setDocModalOpen(true);
@@ -1257,35 +1293,88 @@ export default function DashboardPage() {
     const airportAbortRef = useRef<AbortController | null>(null);
     const [initialized, setInitialized] = useState(false);
     const storageKey = useMemo(() => `form_${activeView}`, [activeView]);
+    const initialSnapshotRef = useRef<any>(null);
+    const [isDirty, setIsDirty] = useState(false);
+        // Debug mount/unmount to diagnose unexpected remounts (Policies form issue)
+        useEffect(()=> {
+            console.debug('[FormModal] mount', { activeView, modalMode });
+            return () => console.debug('[FormModal] unmount', { activeView, modalMode });
+        }, [activeView, modalMode]);
 
     useEffect(() => {
       if (!openModal) return;
       if (modalMode === 'edit' && selectedItem) {
         // deep clone to prevent mutating original reference
         setFormData(JSON.parse(JSON.stringify(selectedItem)));
+    initialSnapshotRef.current = JSON.parse(JSON.stringify(selectedItem));
         setInitialized(true);
         return;
       }
       try {
-        const cached = typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
-        if (cached) {
-          const parsed = JSON.parse(cached);
-            if (parsed && Object.keys(parsed).length > 0) {
-              setFormData(parsed);
-              setInitialized(true);
-              return;
-            }
-        }
+                // For add mode, attempt to restore localStorage draft first (more persistent across reloads than sessionStorage)
+                if (modalMode === 'add') {
+                    const draftKey = `draft_${(activeView==='Client Insight' ? 'Clients' : activeView).toLowerCase()}_${modalMode}`;
+                    const draftRaw = localStorage.getItem(draftKey);
+                    if (draftRaw) {
+                        try {
+                            const draftParsed = JSON.parse(draftRaw);
+                            if (draftParsed && typeof draftParsed === 'object' && Object.keys(draftParsed).length > 0) {
+                                console.debug('[FormModal] Initialized from localStorage draft', { draftKey, keys: Object.keys(draftParsed) });
+                                setFormData(draftParsed);
+                                initialSnapshotRef.current = JSON.parse(JSON.stringify(draftParsed));
+                                setInitialized(true);
+                                return;
+                            }
+                        } catch {}
+                    }
+                }
+                // Fallback: sessionStorage (survives soft navigations within tab)
+                const cached = sessionStorage.getItem(storageKey);
+                if (cached) {
+                    const parsed = JSON.parse(cached);
+                    if (parsed && Object.keys(parsed).length > 0) {
+                        console.debug('[FormModal] Initialized from sessionStorage cache', { storageKey, keys: Object.keys(parsed) });
+                        setFormData(parsed);
+                        initialSnapshotRef.current = JSON.parse(JSON.stringify(parsed));
+                        setInitialized(true);
+                        return;
+                    }
+                }
       } catch {}
       const defaults = activeView === 'Client Insight' ? getFieldsForView('Clients') : getFieldsForView(activeView);
-      setFormData(defaults);
+    setFormData(defaults);
+    initialSnapshotRef.current = JSON.parse(JSON.stringify(defaults));
       setInitialized(true);
     }, [openModal, modalMode, selectedItem, activeView, storageKey]);
 
         useEffect(() => {
       if (!openModal || !initialized) return;
       try { sessionStorage.setItem(storageKey, JSON.stringify(formData)); } catch {}
+                // Dirty tracking
+                try {
+                    if (initialSnapshotRef.current) {
+                        const snap = initialSnapshotRef.current;
+                        // Shallow compare keys relevant for Policies or current view
+                        const keys = Object.keys(formData || {});
+                        const changed = keys.some(k => JSON.stringify((formData as any)[k]) !== JSON.stringify(snap[k]));
+                        setIsDirty(changed);
+                    }
+                } catch {}
     }, [formData, openModal, storageKey, initialized]);
+
+            // Warn before unload if dirty
+            useEffect(()=> {
+                const handler = (e: BeforeUnloadEvent) => {
+                    if (openModal && isDirty) {
+                        e.preventDefault();
+                        e.returnValue = '';
+                        return '';
+                    }
+                    return undefined;
+                };
+                window.addEventListener('beforeunload', handler);
+                return () => window.removeEventListener('beforeunload', handler);
+            }, [isDirty, openModal]);
 
         // Debounced airport search
         useEffect(() => {
@@ -1305,9 +1394,58 @@ export default function DashboardPage() {
             return () => clearTimeout(id);
         }, [airportQuery]);
 
-    useEffect(() => () => { try { sessionStorage.removeItem(storageKey); } catch {} }, [storageKey]);
+    // (Removed) Previously we cleared sessionStorage on unmount; this caused data loss on fast refresh.
+    // We'll now retain sessionStorage until explicit cancel/submit, and also flush on unmount.
 
     const formKeys = useMemo(() => Object.keys(formData).filter(k => !['id','created_at'].includes(k)), [formData]);
+
+    // --- Generic Form Draft Persistence ---
+    const genericDraftKey = useMemo(()=> `draft_${(activeView==='Client Insight' ? 'Clients' : activeView).toLowerCase()}_${modalMode}`, [activeView, modalMode]);
+    // Load draft when opening Add modal (avoid overwriting edit existing record)
+    useEffect(()=> {
+        if (openModal && modalMode==='add') {
+            try {
+                const raw = localStorage.getItem(genericDraftKey);
+                if (raw) {
+                    const d = JSON.parse(raw);
+                    if (d && typeof d === 'object') {
+                                                console.debug('[FormModal] Restoring draft', { genericDraftKey, keys: Object.keys(d) });
+                        setFormData((prev:any)=> ({ ...prev, ...d }));
+                    }
+                }
+            } catch {}
+        }
+    }, [openModal, modalMode, genericDraftKey]);
+    useEffect(()=> {
+        if (openModal && modalMode==='add') {
+            try {
+                const raw = localStorage.getItem(genericDraftKey);
+                if (raw) {
+                    const d = JSON.parse(raw);
+                    if (d && typeof d === 'object') {
+                        console.debug('[FormModal] Restoring draft', { genericDraftKey, keys: Object.keys(d) });
+                        setFormData((prev:any)=> ({ ...prev, ...d }));
+                    }
+                }
+            } catch {}
+        }
+    }, [openModal, modalMode, genericDraftKey]);
+    // Persist draft (debounced) while typing
+    useEffect(()=> {
+        if (!openModal || modalMode!=='add') return;
+        const id = setTimeout(()=> {
+            try { localStorage.setItem(genericDraftKey, JSON.stringify(formData)); } catch {}
+        }, 500);
+        return ()=> clearTimeout(id);
+    }, [formData, openModal, modalMode, genericDraftKey]);
+        // Flush latest form state on unmount to avoid losing recent keystrokes if a reload happens mid-typing
+        useEffect(()=> {
+            return () => {
+                try { sessionStorage.setItem(storageKey, JSON.stringify(formData)); } catch {}
+                try { if (modalMode==='add') localStorage.setItem(genericDraftKey, JSON.stringify(formData)); } catch {}
+            };
+        }, [formData, storageKey, modalMode, genericDraftKey]);
+    // Clear draft on successful submit handled inside handleSubmit
 
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       const { name, value, type, checked } = e.target as HTMLInputElement;
@@ -1318,9 +1456,10 @@ export default function DashboardPage() {
       setFormData((prev: any) => ({ ...prev, [name]: date ? date.format('YYYY-MM-DD') : null }));
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      try { sessionStorage.removeItem(storageKey); } catch {}
+        const handleSubmit = (e: React.FormEvent) => {
+            e.preventDefault();
+            try { sessionStorage.removeItem(storageKey); } catch {}
+            try { if (modalMode==='add') localStorage.removeItem(genericDraftKey); } catch {}
       const viewForDefs = activeView === 'Client Insight' ? 'Clients' : activeView;
             const defs: any = getFieldsForView(viewForDefs);
             const payload: any = {};
@@ -1347,7 +1486,7 @@ export default function DashboardPage() {
         return (
             <Dialog open={openModal} onClose={handleCloseModal} maxWidth={activeView === 'Bookings' ? 'md' : 'sm'} fullWidth keepMounted>
         <DialogTitle>{modalMode === 'add' ? 'Add New' : 'Edit'} {(activeView === 'Client Insight' ? 'Client' : activeView.slice(0, -1))}</DialogTitle>
-        <form onSubmit={handleSubmit}>
+    <form onSubmit={handleSubmit} autoComplete="off">
           <LocalizationProvider dateAdapter={AdapterDayjs}>
             <DialogContent dividers>
                             <Grid container spacing={2} sx={{ pt:1 }}>
@@ -2850,6 +2989,54 @@ const UserReminderModal = ({ open, onClose, existing, userId, onSaved }: { open:
     const [saving, setSaving] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [touched, setTouched] = useState(false);
+    // Draft persistence key (separate for create vs edit)
+    const draftKey = useMemo(()=> existing ? `reminder_draft_${existing.id}` : 'reminder_draft_new', [existing?.id, existing]);
+    // Load draft on mount/open
+    useEffect(()=> {
+        if (open) {
+            try {
+                const raw = localStorage.getItem(draftKey);
+                if (raw) {
+                    const d = JSON.parse(raw);
+                    if (!existing) {
+                        if (d.title) setTitle(d.title);
+                        if (d.details) setDetails(d.details);
+                        if (d.dueAt) setDueAt(d.dueAt);
+                        if (d.remindAt) setRemindAt(d.remindAt);
+                        if (typeof d.priority === 'number') setPriority(d.priority);
+                    }
+                }
+            } catch {}
+        }
+    }, [open, draftKey, existing]);
+    useEffect(()=> {
+        if (open) {
+            try {
+                const raw = localStorage.getItem(draftKey);
+                if (raw) {
+                    const d = JSON.parse(raw);
+                    if (!existing) {
+                        if (d.title) setTitle(d.title);
+                        if (d.details) setDetails(d.details);
+                        if (d.dueAt) setDueAt(d.dueAt);
+                        if (d.remindAt) setRemindAt(d.remindAt);
+                        if (typeof d.priority === 'number') setPriority(d.priority);
+                    }
+                }
+            } catch {}
+        }
+    }, [open, draftKey, existing]);
+    // Persist draft (debounced)
+    useEffect(()=> {
+        if (!open) return; // only persist while modal open
+        const handle = setTimeout(()=> {
+            try {
+                const payload = { title, details, dueAt, remindAt, priority, ts: Date.now() };
+                localStorage.setItem(draftKey, JSON.stringify(payload));
+            } catch {}
+        }, 400);
+        return ()=> clearTimeout(handle);
+    }, [title, details, dueAt, remindAt, priority, draftKey, open]);
     useEffect(()=> {
         if (existing) {
             setTitle(existing.title);
@@ -2893,6 +3080,8 @@ const UserReminderModal = ({ open, onClose, existing, userId, onSaved }: { open:
                 if (error) { setErrorMsg(error.message); }
                 else if (data) onSaved(data as UserReminder);
             }
+            // Clear draft after successful save (only for new)
+            try { if (!isEdit) localStorage.removeItem(draftKey); } catch {}
         } catch (e:any) {
             setErrorMsg(e.message || 'Unexpected error');
         } finally {

@@ -77,6 +77,46 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
 
   useEffect(()=>{ fetchItineraries(); },[fetchItineraries]);
 
+  // --- Draft Persistence ---
+  // Load draft for new itinerary if user had one and nothing selected yet
+  useEffect(()=> {
+    if (selected) return; // only for empty state
+    try {
+      const raw = localStorage.getItem('itinerary_draft_new');
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d && d.title) {
+          const draft: Itinerary = { ...emptyItinerary(d.client_id||null), ...d, id: '' };
+          setSelected(draft);
+        }
+      }
+    } catch {}
+  }, [selected]);
+
+  // Persist draft for: (a) new itinerary without id, (b) unsaved field edits before autosave (lightweight snapshot)
+  useEffect(()=> {
+    if (!selected) return;
+    const key = selected.id ? `itinerary_draft_${selected.id}` : 'itinerary_draft_new';
+    // Avoid storing excessively large arrays by trimming activities details (keep essential fields)
+    const slim = { ...selected, days: selected.days.map(d => ({ date: d.date, activities: (d.activities||[]).map(a => ({ id:a.id, time:a.time, type:a.type, description:a.description, location:a.location, cost:a.cost, currency:a.currency, _costInput:(a as any)._costInput })) })) };
+    try { localStorage.setItem(key, JSON.stringify(slim)); } catch {}
+  }, [selected]);
+
+  // Offer recovery of previous autosaved version when selecting an itinerary
+  const applyLocalDraftIfNewer = useCallback((it: Itinerary) => {
+    try {
+      const key = `itinerary_draft_${it.id}`;
+      const raw = localStorage.getItem(key);
+      if (!raw) return it;
+      const draft = JSON.parse(raw);
+      // Simple heuristic: choose draft if it has more activities total or later updated_at (if exists)
+      const draftActs = (draft.days||[]).reduce((s:number,d:any)=> s + (d.activities?.length||0),0);
+      const serverActs = (it.days||[]).reduce((s,d)=> s + (d.activities?.length||0),0);
+      if (draftActs > serverActs) return { ...it, ...draft, id: it.id };
+    } catch {}
+    return it;
+  }, []);
+
   // Derived list
   const filtered = useMemo(()=> itineraries.filter(i => {
     if (search) {
@@ -179,7 +219,7 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
     if (error) { setSnackbar({open:true, message:`Create failed: ${error.message}`, severity:'error'}); return; }
   setItineraries(prev => [data as Itinerary, ...prev]);
   bumpVersion();
-  setSelected(data as Itinerary);
+  setSelected(applyLocalDraftIfNewer(data as Itinerary));
   freshlyCreatedRef.current = true; // prevent immediate autosave cycle wiping defaults
     setSnackbar({open:true, message:'Itinerary created', severity:'success'});
   };
@@ -422,7 +462,7 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
                   <Tooltip title="Delete"><IconButton size="small" onClick={(e)=>{ e.stopPropagation(); deleteItinerary(i.id); }}><DeleteIcon fontSize="inherit" color="error" /></IconButton></Tooltip>
                 </Stack>
               }>
-                <ListItemButton selected={selected?.id === i.id} onClick={()=>setSelected(i)}>
+                <ListItemButton selected={selected?.id === i.id} onClick={()=>setSelected(applyLocalDraftIfNewer(i))}>
                   <ListItemText primary={i.title} secondary={`${dayjs(i.start_date).format('MMM D')} - ${dayjs(i.end_date).format('MMM D')}`} />
                 </ListItemButton>
               </ListItem>
