@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import type { UserDailyMetrics, UserActivity } from '../lib/types';
-import type { Client, Booking, Visa, Passport, Policy, Reminder } from '../lib/types'
+import type { Client, Booking, Visa, Passport, Policy, Reminder, UserReminder } from '../lib/types'
 import { createClient, Session } from '@supabase/supabase-js'
 import {
     Box, CssBaseline, AppBar, Toolbar, Typography, Container, Paper, CircularProgress,
@@ -24,13 +24,14 @@ import dynamic from 'next/dynamic';
 import {
     Dashboard as DashboardIcon, People as PeopleIcon, Flight as FlightIcon, VpnKey as VpnKeyIcon,
     CreditCard as CreditCardIcon, Policy as PolicyIcon, Delete as DeleteIcon, Add as AddIcon,
+    CheckCircle as CheckCircleIcon,
     Edit as EditIcon, Menu as MenuIcon, Notifications as NotificationsIcon, Cake as CakeIcon,
     Search as SearchIcon, ArrowUpward as ArrowUpwardIcon, ArrowDownward as ArrowDownwardIcon,
     Logout as LogoutIcon, UploadFile as UploadFileIcon, Description as DescriptionIcon,
     ExpandMore as ExpandMoreIcon, AccountBox as AccountBoxIcon, Download as DownloadIcon, Share as ShareIcon,
     Analytics as AnalyticsIcon, Notes as NotesIcon, Star as StarIcon, Email as EmailIcon, Phone as PhoneIcon,
     Visibility as VisibilityIcon, ExpandLess as ExpandLessIcon, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon,
-    Person as PersonIcon
+    Person as PersonIcon, Undo as UndoIcon
 } from '@mui/icons-material'
 import NextLink from 'next/link'
 import {
@@ -249,6 +250,10 @@ export default function DashboardPage() {
   const [selectedClientForDocs, setSelectedClientForDocs] = useState<Client | null>(null);
   
   const [snackbar, setSnackbar] = useState<{open: boolean, message: string}>({open: false, message: ''});
+    // User Reminders state (Phase 1)
+    const [userReminders, setUserReminders] = useState<UserReminder[]>([]);
+    const [reminderModalOpen, setReminderModalOpen] = useState(false);
+    const [editingReminder, setEditingReminder] = useState<UserReminder | null>(null);
     // Duplicate client pre-insert handling
     const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
     const [pendingClientCreate, setPendingClientCreate] = useState<{ payload: any; matches: Client[] } | null>(null);
@@ -365,6 +370,19 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+    // Fetch user reminders with polling
+    useEffect(()=> {
+        if (!session?.user?.id) return;
+        let timer: any;
+        const load = async () => {
+            const { data } = await supabase.from('user_reminders').select('*').eq('user_id', session.user.id).order('due_at', { ascending: true });
+            if (data) setUserReminders(data as UserReminder[]);
+        };
+        load();
+        timer = setInterval(load, 60000);
+        return ()=> clearInterval(timer);
+    }, [session]);
 
     // Persist user/global metric mode preference
     useEffect(() => {
@@ -733,6 +751,7 @@ export default function DashboardPage() {
     { text: 'Passports', icon: <CreditCardIcon />, view: 'Passports' },
     { text: 'Policies', icon: <PolicyIcon />, view: 'Policies'},
     { text: 'Itineraries', icon: <NotesIcon />, view: 'Itineraries' },
+    { text: 'Tasks', icon: <NotificationsIcon />, view: 'Tasks' },
   ];
 
   const drawer = (
@@ -781,7 +800,7 @@ export default function DashboardPage() {
         case 'Bookings':
         case 'Visas':
         case 'Passports':
-        case 'Policies':
+                case 'Policies':
             return <TableView 
                 data={filteredData} 
                 view={activeView}
@@ -802,6 +821,14 @@ export default function DashboardPage() {
                 onDateToChange={setDateTo}
                 onClearDates={()=>{ setDateFrom(null); setDateTo(null); }}
             />;
+                        case 'Tasks':
+                                                return <UserRemindersView 
+                                                    reminders={userReminders} 
+                                                    onCreate={()=>{ setEditingReminder(null); setReminderModalOpen(true); }}
+                                                    onEdit={(r: UserReminder)=> { setEditingReminder(r); setReminderModalOpen(true); }}
+                                                    onStatusChange={async (r: UserReminder, status: UserReminder['status'])=> { await supabase.from('user_reminders').update({ status, updated_at: new Date().toISOString() }).eq('id', r.id); setUserReminders(list => list.map(x => x.id===r.id? { ...x, status }: x)); }}
+                                                    onDelete={(id: string)=> setUserReminders(list => list.filter(r => r.id !== id))}
+                                                />;
         default: return <Typography>Select a view</Typography>;
     }
   };
@@ -1696,7 +1723,7 @@ export default function DashboardPage() {
     )
   }
 
-  const RightDrawer = ({ reminders, onReminderClick }: { reminders: Reminder[]; onReminderClick: (reminder: Reminder) => void; }) => {
+    const RightDrawer = ({ reminders, userReminders, onReminderClick, onTaskEdit }: { reminders: Reminder[]; userReminders: UserReminder[]; onReminderClick: (reminder: Reminder) => void; onTaskEdit: (r: UserReminder) => void; }) => {
     const getReminderIcon = (type: string) => ({ Birthday: <CakeIcon color="secondary" />, Passport: <CreditCardIcon color="error" />, Visa: <VpnKeyIcon color="error" />, Policy: <PolicyIcon color="error" />, Booking: <FlightIcon color="info" /> }[type] || <NotificationsIcon />);
     const getReminderMessage = (r: Reminder) => {
         let message = `${r.type} for ${r.name}`;
@@ -1742,7 +1769,7 @@ export default function DashboardPage() {
             <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Reminders</Typography>
             <NotificationsIcon color="primary" />
           </Box>
-          {Object.keys(categorizedReminders).length > 0 ? (
+                    {Object.keys(categorizedReminders).length > 0 ? (
             Object.entries(categorizedReminders).map(([category, items]) => (
               <Accordion key={category} defaultExpanded={true} elevation={1} sx={{ mb: 1 }}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}> 
@@ -1760,6 +1787,26 @@ export default function DashboardPage() {
           ) : (
             <Alert severity="success" sx={{mt: 2}}>No upcoming reminders!</Alert>
           )}
+                    {/* User personal tasks (open only) */}
+                    {userReminders && userReminders.filter(r=> r.status !== 'done' && r.status !== 'cancelled').length > 0 && (
+                        <Accordion defaultExpanded elevation={1} sx={{ mt: 2 }}>
+                            <AccordionSummary expandIcon={<ExpandMoreIcon />}> 
+                                <Typography variant="subtitle2" sx={{ fontWeight:'bold' }}>My Tasks ({userReminders.filter(r=> r.status !== 'done' && r.status !== 'cancelled').length})</Typography>
+                            </AccordionSummary>
+                            <AccordionDetails sx={{ p: 1 }}>
+                                {userReminders.filter(r=> r.status !== 'done' && r.status !== 'cancelled').slice(0,15).map(t => {
+                                    const due = t.due_at ? dayjs(t.due_at) : null;
+                                    const overdue = due && due.isBefore(dayjs(), 'minute');
+                                    return (
+                                        <Alert key={t.id} severity={overdue ? 'error':'info'} icon={<CheckCircleIcon fontSize="small" color={overdue? 'error':'success'} />} sx={{ mb:1, cursor:'pointer', '&:last-child':{mb:0} }} onClick={()=> onTaskEdit(t)}>
+                                            <Typography variant="body2" component="span" sx={{ fontWeight:600 }}>{t.title}</Typography>{' '}
+                                            <Typography variant="caption" component="span">{due ? `• ${overdue? 'Overdue':'Due'} ${due.format(DISPLAY_DATE_TIME)}` : ''}</Typography>
+                                        </Alert>
+                                    );
+                                })}
+                            </AccordionDetails>
+                        </Accordion>
+                    )}
         </Box>
       </Drawer>
     );
@@ -1836,11 +1883,26 @@ export default function DashboardPage() {
                                                     </Container>
                                                 )}
                                         </Box>
-                    {showReminders && <RightDrawer reminders={reminders} onReminderClick={handleReminderClick} />}
+                    {showReminders && <RightDrawer reminders={reminders} userReminders={userReminders} onReminderClick={handleReminderClick} onTaskEdit={(r)=> { setEditingReminder(r); setReminderModalOpen(true); }} />}
                     {openModal && <FormModal />}
                     {docModalOpen && <DocumentUploadModal onShowSnackbar={setSnackbar} />}
                     <ConfirmationDialog />
                     <DuplicateClientDialog />
+                    {/* Task / Reminder Modal */}
+                    <UserReminderModal 
+                        open={reminderModalOpen} 
+                        onClose={()=> { setReminderModalOpen(false); setEditingReminder(null); }} 
+                        existing={editingReminder} 
+                        userId={session?.user.id || ''} 
+                        onSaved={(r)=> { 
+                            setReminderModalOpen(false); 
+                            setEditingReminder(null); 
+                            setUserReminders(list => { 
+                                const idx = list.findIndex(x=>x.id===r.id); 
+                                return idx>=0 ? list.map(x=> x.id===r.id ? r : x) : [r, ...list]; 
+                            }); 
+                        }} 
+                    />
                     <Snackbar
                         open={snackbar.open}
                         autoHideDuration={6000}
@@ -2508,6 +2570,171 @@ const NoteEditModal: React.FC<NoteEditModalProps> = ({ open, onClose, note, onSa
                     <Button type="submit" variant="contained">Save Changes</Button>
                 </DialogActions>
             </form>
+        </Dialog>
+    );
+};
+
+// --- USER REMINDERS VIEW (Phase 1) ---
+const UserRemindersView = ({ reminders, onCreate, onEdit, onStatusChange, onDelete }: { reminders: UserReminder[]; onCreate: () => void; onEdit: (r: UserReminder) => void; onStatusChange: (r: UserReminder, status: UserReminder['status']) => void; onDelete: (id: string) => void }) => {
+    const openItems = reminders.filter(r => r.status !== 'done' && r.status !== 'cancelled');
+    const doneItems = reminders.filter(r => r.status === 'done').slice(0, 10);
+    return (
+        <Fade in={true}>
+            <Paper sx={{ p:2, mt:2 }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+                    <Typography variant="h5" sx={{ fontWeight:'bold' }}>My Tasks</Typography>
+                    <Button variant="contained" startIcon={<AddIcon />} onClick={onCreate}>New Task</Button>
+                </Stack>
+                <Grid container spacing={3}>
+                    <Grid item xs={12} md={7}>
+                        <Paper variant="outlined" sx={{ p:2, height:'100%' }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight:'bold', mb:1 }}>Open ({openItems.length})</Typography>
+                            <List dense sx={{ maxHeight: 420, overflowY:'auto' }}>
+                                {openItems.length === 0 && <ListItem><ListItemText primary="No open tasks" /></ListItem>}
+                                {openItems.map(r => {
+                                    const due = r.due_at ? dayjs(r.due_at) : null;
+                                    const overdue = due && due.isBefore(dayjs(), 'minute');
+                                    const pr = r.priority ?? 0;
+                                    const priorityColor = pr === 2 ? 'error.main' : pr === 1 ? 'warning.main' : 'info.main';
+                                    return (
+                                        <ListItem 
+                                            key={r.id} 
+                                            divider 
+                                            alignItems="flex-start" 
+                                            sx={{ borderLeft: '4px solid', borderLeftColor: priorityColor, pl:1.5 }}
+                                            secondaryAction={
+                                                <Stack direction="row" spacing={1}>
+                                                    <Tooltip title="Edit"><IconButton size="small" onClick={()=>onEdit(r)}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                                                    <Tooltip title="Mark Done"><IconButton size="small" onClick={()=>onStatusChange(r,'done')}><CheckCircleIcon color="success" fontSize="small" /></IconButton></Tooltip>
+                                                </Stack>
+                                            }>
+                                            <ListItemText
+                                                primary={<Stack direction="row" spacing={1} alignItems="center"><Typography variant="body1" sx={{ fontWeight:600 }}>{r.title}</Typography>{overdue && <Chip size="small" color="error" label="Overdue" />}{pr>0 && <Chip size="small" color={pr===2? 'error':'warning'} label={pr===2? 'Critical':'High'} />}</Stack>}
+                                                secondary={<Typography variant="caption" color="text.secondary">{due ? `Due: ${due.format(DISPLAY_DATE_TIME)}` : 'No due date'}</Typography>}
+                                            />
+                                        </ListItem>
+                                    );
+                                })}
+                            </List>
+                        </Paper>
+                    </Grid>
+                    <Grid item xs={12} md={5}>
+                        <Paper variant="outlined" sx={{ p:2 }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight:'bold', mb:1 }}>Recently Completed</Typography>
+                            <List dense sx={{ maxHeight: 420, overflowY:'auto' }}>
+                                {doneItems.length === 0 && <ListItem><ListItemText primary="No completed tasks" /></ListItem>}
+                                {doneItems.map(r => {
+                                    const pr = r.priority ?? 0;
+                                    const priorityColor = pr === 2 ? 'error.main' : pr === 1 ? 'warning.main' : 'info.main';
+                                    return (
+                                        <ListItem key={r.id} divider sx={{ borderLeft:'4px solid', borderLeftColor: priorityColor, pl:1.5 }} secondaryAction={
+                                            <Stack direction="row" spacing={1}>
+                                                <Tooltip title="Restore"><IconButton size="small" onClick={()=> onStatusChange(r,'open')}><UndoIcon fontSize="small" /></IconButton></Tooltip>
+                                                <Tooltip title="Delete Permanently"><IconButton size="small" onClick={async ()=> { const id = r.id; const { error } = await supabase.from('user_reminders').delete().eq('id', id); if (!error) { onDelete(id); } }}><DeleteIcon color="error" fontSize="small" /></IconButton></Tooltip>
+                                            </Stack>
+                                        }>
+                                            <ListItemIcon><CheckCircleIcon color="success" fontSize="small" /></ListItemIcon>
+                                            <ListItemText primary={<Stack direction="row" spacing={1} alignItems="center"><Typography variant="body2" sx={{ textDecoration:'line-through' }}>{r.title}</Typography>{pr>0 && <Chip size="small" color={pr===2? 'error':'warning'} label={pr===2? 'Critical':'High'} />}</Stack>} secondary={r.due_at ? dayjs(r.due_at).format(DISPLAY_DATE) : undefined} />
+                                        </ListItem>
+                                    );
+                                })}
+                            </List>
+                        </Paper>
+                    </Grid>
+                </Grid>
+            </Paper>
+        </Fade>
+    );
+};
+
+// --- USER REMINDER CREATE / EDIT MODAL ---
+const UserReminderModal = ({ open, onClose, existing, userId, onSaved }: { open: boolean; onClose: () => void; existing: UserReminder | null; userId: string; onSaved: (r: UserReminder) => void }) => {
+    const isEdit = Boolean(existing);
+    const [title, setTitle] = useState(existing?.title || '');
+    const [details, setDetails] = useState(existing?.details || '');
+    const [dueAt, setDueAt] = useState<string | null>(existing?.due_at || null);
+    const [remindAt, setRemindAt] = useState<string | null>(existing?.remind_at || null);
+    const [priority, setPriority] = useState<number>(existing?.priority ?? 0);
+    const [saving, setSaving] = useState(false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [touched, setTouched] = useState(false);
+    useEffect(()=> {
+        if (existing) {
+            setTitle(existing.title);
+            setDetails(existing.details||'');
+            setDueAt(existing.due_at||null);
+            setRemindAt(existing.remind_at||null);
+            setPriority(existing.priority??0);
+        }
+    }, [existing]);
+
+    const handleSave = async () => {
+        setTouched(true);
+        setErrorMsg(null);
+        if (!title.trim()) { setErrorMsg('Title is required'); return; }
+        setSaving(true);
+        try {
+            // Derive defaults: if dueAt provided & no remindAt, remind 1 hour before (if future), else now
+            let finalRemind = remindAt;
+            if (!finalRemind && dueAt) {
+                const due = dayjs(dueAt);
+                const candidate = due.subtract(1,'hour');
+                finalRemind = (candidate.isAfter(dayjs()) ? candidate : dayjs()).toISOString();
+            }
+            // Normalize to ISO timestamps if date-only selected
+            const toIso = (d: string | null) => d ? (d.length === 10 ? dayjs(d + 'T09:00:00').toISOString() : dayjs(d).toISOString()) : null;
+            const payload: any = { 
+                user_id: userId, 
+                title: title.trim(), 
+                details: details||null, 
+                due_at: toIso(dueAt), 
+                remind_at: toIso(finalRemind), 
+                priority, 
+                status: existing?.status || 'open' 
+            };
+            if (isEdit && existing) {
+                const { data, error } = await supabase.from('user_reminders').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', existing.id).select().single();
+                if (error) { setErrorMsg(error.message); }
+                else if (data) onSaved(data as UserReminder);
+            } else {
+                const { data, error } = await supabase.from('user_reminders').insert([payload]).select().single();
+                if (error) { setErrorMsg(error.message); }
+                else if (data) onSaved(data as UserReminder);
+            }
+        } catch (e:any) {
+            setErrorMsg(e.message || 'Unexpected error');
+        } finally {
+            setSaving(false);
+        }
+    };
+    return (
+        <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+            <DialogTitle>{isEdit? 'Edit Task':'New Task'}</DialogTitle>
+            <DialogContent dividers>
+                <Stack spacing={2}>
+                    <TextField label="Title" value={title} onChange={e=>setTitle(e.target.value)} onBlur={()=>setTouched(true)} required fullWidth error={touched && !title.trim()} helperText={touched && !title.trim() ? 'Title is required' : ' '} />
+                    <TextField label="Details" value={details} onChange={e=>setDetails(e.target.value)} fullWidth multiline rows={3} />
+                    <LocalizationProvider dateAdapter={AdapterDayjs}>
+                        <Stack direction={{ xs:'column', sm:'row' }} spacing={2}>
+                            <DatePicker label="Due Date" format={DISPLAY_DATE} value={dueAt? dayjs(dueAt): null} onChange={d=> setDueAt(d? d.format('YYYY-MM-DD'): null)} slotProps={{ textField:{ fullWidth:true, size:'small' } }} />
+                            <DatePicker label="Remind Date" format={DISPLAY_DATE} value={remindAt? dayjs(remindAt): null} onChange={d=> setRemindAt(d? d.format('YYYY-MM-DD'): null)} slotProps={{ textField:{ fullWidth:true, size:'small' } }} />
+                        </Stack>
+                    </LocalizationProvider>
+                    <FormControl fullWidth size="small">
+                        <InputLabel>Priority</InputLabel>
+                        <Select label="Priority" value={priority} onChange={e=> setPriority(Number(e.target.value))}>
+                            <MenuItem value={0}>Normal</MenuItem>
+                            <MenuItem value={1}>High</MenuItem>
+                            <MenuItem value={2}>Critical</MenuItem>
+                        </Select>
+                    </FormControl>
+                    {errorMsg && <Alert severity="error" variant="outlined">{errorMsg}</Alert>}
+                </Stack>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Cancel</Button>
+                <Button variant="contained" onClick={handleSave} disabled={saving || !title.trim()}>{saving? 'Saving...':'Save'}</Button>
+            </DialogActions>
         </Dialog>
     );
 };

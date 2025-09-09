@@ -212,3 +212,20 @@ export interface UserApiKey {
   revoked_at?: string
   created_at?: string
 }
+
+// --- User Reminder / Task Type ---
+export interface UserReminder {
+  id: string
+  user_id: string
+  title: string
+  details?: string | null
+  due_at?: string | null
+  remind_at?: string | null
+  snoozed_until?: string | null
+  priority?: number | null // 0 normal, 1 high, 2 critical
+  status?: 'open' | 'done' | 'cancelled' | 'blocked'
+  recurrence?: string | null // 'none' | 'daily' | 'weekly' | 'monthly' | custom token
+  last_fired_at?: string | null
+  created_at?: string
+  updated_at?: string
+}
