@@ -8,8 +8,10 @@ import {
   Select, FormControl, InputLabel, Snackbar, Alert
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ContentCopy as ContentCopyIcon, Download as DownloadIcon, Save as SaveIcon, FilterList as FilterListIcon } from '@mui/icons-material';
+import Autocomplete from '@mui/material/Autocomplete';
 import dayjs from 'dayjs';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { DISPLAY_DATE } from '../lib/dateFormats';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
@@ -128,7 +130,8 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
       if (!prev) return prev;
       const days = [...prev.days];
       const target = { ...days[dayIndex] };
-      const newAct: ItineraryActivity = { id: Math.random().toString(36).slice(2), time:'', type:'Activity', description:'', location:'', cost:0, currency: prev.currency };
+  const newAct: ItineraryActivity = { id: Math.random().toString(36).slice(2), time:'', type:'Activity', description:'', location:'', cost:0, currency: prev.currency } as ItineraryActivity & { _costInput?: string };
+  (newAct as any)._costInput = '';
       target.activities = [...(target.activities||[]), newAct];
       days[dayIndex] = target;
       return { ...prev, days };
@@ -136,7 +139,7 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
     scheduleSave();
   };
 
-  const updateActivity = (dayIndex: number, actId: string, patch: Partial<ItineraryActivity>) => {
+  const updateActivity = (dayIndex: number, actId: string, patch: Partial<ItineraryActivity & { _costInput?: string }>) => {
     bumpVersion();
     setSelected(prev => {
       if (!prev) return prev;
@@ -310,13 +313,16 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
         <Paper sx={{ p:2, height:'100%', display:'flex', flexDirection:'column', gap:1 }}>
           <Typography variant="h6" sx={{ fontWeight:'bold' }}>Itineraries</Typography>
           <TextField size="small" label="Search" value={search} onChange={e=>setSearch(e.target.value)} />
-          <FormControl size="small">
-            <InputLabel>Client</InputLabel>
-            <Select label="Client" value={filterClient} onChange={e=>setFilterClient(e.target.value)}>
-              <MenuItem value=""><em>All</em></MenuItem>
-              {clients.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
-            </Select>
-          </FormControl>
+          <Autocomplete
+            size="small"
+            options={clients}
+            getOptionLabel={(c)=> [c.first_name,c.last_name].filter(Boolean).join(' ')}
+            isOptionEqualToValue={(a,b)=> a.id===b.id}
+            value={clients.find(c=> c.id===filterClient) || null}
+            onChange={(e,val)=> setFilterClient(val? val.id: '')}
+            renderInput={(params)=><TextField {...params} label="Client Filter" />}
+            clearOnEscape
+          />
           <Stack direction="row" spacing={1}>
             <Button fullWidth variant="contained" startIcon={<AddIcon />} onClick={()=>createItinerary()}>New</Button>
             <Tooltip title="Create from Template">
@@ -365,24 +371,27 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
                 </Stack>
               </Stack>
               <Grid container spacing={2}>
-                <Grid item xs={12} md={3}><DatePicker label="Start" value={dayjs(selected.start_date)} onChange={d=> { if (!d) return; handleFieldChange('start_date', d.format('YYYY-MM-DD')); }} slotProps={{ textField:{ size:'small', fullWidth:true } }} /></Grid>
-                <Grid item xs={12} md={3}><DatePicker label="End" value={dayjs(selected.end_date)} onChange={d=> { if (!d) return; handleFieldChange('end_date', d.format('YYYY-MM-DD')); }} slotProps={{ textField:{ size:'small', fullWidth:true } }} /></Grid>
+                <Grid item xs={12} md={3}><DatePicker format={DISPLAY_DATE} label="Start" value={dayjs(selected.start_date)} onChange={d=> { if (!d) return; handleFieldChange('start_date', d.format('YYYY-MM-DD')); }} slotProps={{ textField:{ size:'small', fullWidth:true } }} /></Grid>
+                <Grid item xs={12} md={3}><DatePicker format={DISPLAY_DATE} label="End" value={dayjs(selected.end_date)} onChange={d=> { if (!d) return; handleFieldChange('end_date', d.format('YYYY-MM-DD')); }} slotProps={{ textField:{ size:'small', fullWidth:true } }} /></Grid>
                 <Grid item xs={12} md={4}>
-                  <FormControl size="small" fullWidth>
-                    <InputLabel>Client</InputLabel>
-                    <Select label="Client" value={selected.client_id || ''} onChange={e=>{
-                      const val = (e.target.value as string) || '';
-                      const newId = val || null;
+                  <Autocomplete
+                    size="small"
+                    options={clients}
+                    getOptionLabel={(c)=> [c.first_name, c.last_name].filter(Boolean).join(' ')}
+                    isOptionEqualToValue={(a,b)=> a.id===b.id}
+                    value={clients.find(c=> c.id === (selected.client_id||'')) || null}
+                    onChange={(e,val)=> {
+                      const newId = val? val.id : null;
                       bumpVersion();
                       setSelected(p=> p? { ...p, client_id: newId }: p);
                       setItineraries(list => list.map(i => i.id === selected?.id ? { ...i, client_id: newId } : i));
-                      // Save with override so we don't lose change due to stale selected in async
                       saveSelected({ client_id: newId });
-                    }}>
-                      <MenuItem value=""><em>Unassigned</em></MenuItem>
-                      {clients.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
-                    </Select>
-                  </FormControl>
+                    }}
+                    renderInput={(params)=><TextField {...params} fullWidth label="Client" placeholder="Search client" />}
+                    clearOnEscape
+                    sx={{ width: '100%' }}
+                    autoHighlight
+                  />
                 </Grid>
                 <Grid item xs={6} md={2}><TextField size="small" label="Travelers" type="number" value={selected.travelers} onChange={e=>{ bumpVersion(); setSelected(p=> p? { ...p, travelers: parseInt(e.target.value)||0 }: p); scheduleSave(); }} fullWidth /></Grid>
                 <Grid item xs={6} md={2}><TextField size="small" label="Currency" value={selected.currency} onChange={e=>{ bumpVersion(); setSelected(p=> p? { ...p, currency: e.target.value }: p); scheduleSave(); }} fullWidth /></Grid>
@@ -425,7 +434,28 @@ const ItinerariesView: React.FC<Props> = ({ clients }) => {
                                 </Grid>
                                 <Grid item xs={12} md={3}><TextField size="small" fullWidth label="Description" value={a.description||''} onChange={e=>updateActivity(idx,a.id!,{ description:e.target.value })} /></Grid>
                                 <Grid item xs={12} md={2}><TextField size="small" fullWidth label="Location" value={a.location||''} onChange={e=>updateActivity(idx,a.id!,{ location:e.target.value })} /></Grid>
-                                <Grid item xs={6} md={2}><TextField size="small" fullWidth type="number" label="Cost" value={a.cost ?? ''} onChange={e=>updateActivity(idx,a.id!,{ cost: parseFloat(e.target.value)||0 })} /></Grid>
+                                <Grid item xs={6} md={2}>
+                                  <TextField 
+                                    size="small" 
+                                    fullWidth 
+                                    label="Cost" 
+                                    inputMode="decimal"
+                                    value={(a as any)._costInput !== undefined ? (a as any)._costInput : (a.cost ?? '')}
+                                    onChange={e=> {
+                                      const raw = e.target.value;
+                                      // Allow empty or partial input, store in _costInput
+                                      updateActivity(idx, a.id!, { _costInput: raw });
+                                    }}
+                                    onBlur={e=> {
+                                      const raw = e.target.value.trim();
+                                      if (raw === '') { updateActivity(idx,a.id!,{ cost: undefined, _costInput: '' }); return; }
+                                      const num = Number(raw.replace(/[^0-9.\-]/g,''));
+                                      if (!isNaN(num)) {
+                                        updateActivity(idx,a.id!,{ cost: num, _costInput: String(num) });
+                                      }
+                                    }}
+                                  />
+                                </Grid>
                                 <Grid item xs={6} md={1} sx={{ display:'flex', alignItems:'center', justifyContent:'flex-end' }}>
                                   <Tooltip title="Remove"><IconButton color="error" onClick={()=>removeActivity(idx,a.id!)}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
                                 </Grid>

@@ -12,6 +12,7 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import NextLink from 'next/link';
 import dayjs from 'dayjs';
+import { DISPLAY_DATE, DISPLAY_DATE_TIME } from '../../lib/dateFormats';
 
 const ProfilePage: React.FC = () => {
   const [mounted, setMounted] = useState(false);
@@ -108,7 +109,7 @@ const ProfilePage: React.FC = () => {
     (async () => {
       await ensureProfile(authUser);
       if (!authUser?.id) return;
-      const since = dayjs().subtract(30,'day').format('YYYY-MM-DD');
+      const since = dayjs().subtract(30,'day').format('YYYY-MM-DD'); // keep storage/query format
       const { data: met } = await supabase.from('user_metrics_daily').select('*').eq('user_id', authUser.id).gte('date', since).order('date');
       if (met) setMetrics(met as any);
       // Fetch department data (created_at limited) for holistic analytics (system-wide)
@@ -230,7 +231,13 @@ const ProfilePage: React.FC = () => {
     setSnackbar({open:true,message:`Theme set to ${newTheme}`,severity:'success'});
   };
 
-  // Helper: last 30 calendar days list (inclusive today)
+  // Full name helper (first + middle + last fallback to display_name)
+  const fullName = useMemo(()=> {
+    if (!profile) return 'User';
+    return [profile.first_name, (profile as any)?.middle_name, profile.last_name].filter(Boolean).join(' ') || profile.display_name || 'User';
+  }, [profile]);
+
+  // Helper: last 30 calendar days list (inclusive today) for storage/queries
   const last30Days = useMemo(()=> {
     const arr: string[] = [];
     for (let i=29;i>=0;i--) arr.push(dayjs().subtract(i,'day').format('YYYY-MM-DD'));
@@ -264,7 +271,8 @@ const ProfilePage: React.FC = () => {
     const m = metrics.find(x=>x.date===d);
     const bookingRevenue = m? Number(m.revenue_sum||0):0;
     return {
-      date: d.slice(5),
+      date: d.slice(5), // legacy short
+      displayDate: dayjs(d).format('DD/MM'),
       isoDate: d,
       bookings: m?.bookings_count||0,
       bookingRevenue,
@@ -272,7 +280,7 @@ const ProfilePage: React.FC = () => {
       visaRevenue: 0,
       passportRevenue: 0,
       totalRevenue: bookingRevenue,
-      revenue: bookingRevenue, // backward compatibility
+      revenue: bookingRevenue,
       avg: m? Number(m.avg_booking_value||0):0
     };
   }), [metrics, last30Days]);
@@ -289,6 +297,7 @@ const ProfilePage: React.FC = () => {
     const bookings = b?.count||0;
     return {
       date: d.slice(5),
+      displayDate: dayjs(d).format('DD/MM'),
       isoDate: d,
       bookings,
       bookingRevenue,
@@ -300,7 +309,7 @@ const ProfilePage: React.FC = () => {
       avg: bookings ? (bookingRevenue / bookings) : 0
     };
   }), [deptDaily, last30Days]);
-  const salesTrend = (dataScope==='me' && metrics.length) ? userSalesTrend : globalSalesTrend;
+  const salesTrend = (dataScope==='me') ? userSalesTrend : globalSalesTrend;
   // Filtered sales trend for daily table (does not affect overview chart to preserve 30d visuals)
   const filteredSalesTrend = useMemo(()=> {
     if (!salesFrom && !salesTo) return salesTrend;
@@ -316,23 +325,20 @@ const ProfilePage: React.FC = () => {
 
     const kpis = useMemo(()=> {
       const bookings = salesTrend.reduce((s,r)=>s+r.bookings,0);
-      // IMPORTANT: use r.bookingRevenue (pure booking-only) not r.revenue (which may be totalRevenue for global scope)
       const bookingRevenue = salesTrend.reduce((s,r)=>s+(r.bookingRevenue||0),0);
       const policyRevenueGlobal = Object.values(deptDaily.policies||{}).reduce((s:any,r:any)=>s+r.value,0);
       const visaRevenueGlobal = Object.values(deptDaily.visas||{}).reduce((s:any,r:any)=>s+r.value,0);
       const passportRevenueGlobal = Object.values(deptDaily.passports||{}).reduce((s:any,r:any)=>s+r.value,0);
-      const policyRevenue = (dataScope==='me' && metrics.length) ? 0 : policyRevenueGlobal;
-      const visaRevenue = (dataScope==='me' && metrics.length) ? 0 : visaRevenueGlobal;
-      const passportRevenue = (dataScope==='me' && metrics.length) ? 0 : passportRevenueGlobal;
+      const policyRevenue = (dataScope==='me') ? 0 : policyRevenueGlobal;
+      const visaRevenue = (dataScope==='me') ? 0 : visaRevenueGlobal;
+      const passportRevenue = (dataScope==='me') ? 0 : passportRevenueGlobal;
+      const policies = (dataScope==='me') ? metrics.reduce((s,m)=>s+m.policies_count,0) : (deptDaily.policies ? Object.values(deptDaily.policies).reduce((s,r)=>s+r.count,0):0);
+      const clients = (dataScope==='me') ? 0 : Object.values(deptDaily.clients||{}).reduce((s,r)=>s+r.count,0);
+      const visas = (dataScope==='me') ? 0 : Object.values(deptDaily.visas||{}).reduce((s,r)=>s+r.count,0);
+      const passports = (dataScope==='me') ? 0 : Object.values(deptDaily.passports||{}).reduce((s,r)=>s+r.count,0);
+      const itineraries = (dataScope==='me') ? 0 : Object.values(deptDaily.itineraries||{}).reduce((s,r)=>s+r.count,0);
       const totalRevenue = bookingRevenue + policyRevenue + visaRevenue + passportRevenue;
-      const policies = (dataScope==='me' && metrics.length)
-        ? metrics.reduce((s,m)=>s+m.policies_count,0)
-        : (deptDaily.policies ? Object.values(deptDaily.policies).reduce((s,r)=>s+r.count,0):0);
-      const avg = bookings ? bookingRevenue / bookings : 0; // booking average
-      const clients = Object.values(deptDaily.clients||{}).reduce((s,r)=>s+r.count,0);
-      const visas = Object.values(deptDaily.visas||{}).reduce((s,r)=>s+r.count,0);
-      const passports = Object.values(deptDaily.passports||{}).reduce((s,r)=>s+r.count,0);
-      const itineraries = Object.values(deptDaily.itineraries||{}).reduce((s,r)=>s+r.count,0);
+      const avg = bookings ? bookingRevenue / bookings : 0;
       return { bookings, bookingRevenue, policyRevenue, visaRevenue, passportRevenue, totalRevenue, policies, avg, clients, visas, passports, itineraries };
     },[salesTrend, deptDaily, dataScope, metrics]);
 
@@ -372,9 +378,9 @@ const ProfilePage: React.FC = () => {
         };
         // Header
         pdf.setFontSize(16); write(`Profile Analytics Report`, { bold: true });
-  pdf.setFontSize(11); write(`User: ${profile?.display_name || profile?.first_name || 'User'}`);
-  write(`Scope: ${ (dataScope==='me' && metrics.length) ? 'My Data' : 'All Data' }`);
-        write(`Generated: ${new Date().toLocaleString()}`);
+        pdf.setFontSize(11); write(`User: ${fullName}`);
+        write(`Scope: ${ dataScope==='me' ? 'My Data' : 'All Data' }`);
+        write(`Generated: ${dayjs().format(DISPLAY_DATE_TIME)}`);
         y += 2; pdf.setDrawColor(180); pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
         // KPIs
         write('KPIs (30 days):', { bold: true });
@@ -395,17 +401,16 @@ const ProfilePage: React.FC = () => {
         kpiPairs.forEach(([k,v]) => write(`${k}: ${v}`));
         y += 2; pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
         // Sales Trend Table (last 14 days)
-  write('Sales Trend (Last 14 days):', { bold: true });
-  write('Date  | Bkgs | BookRev | PolRev | VisaRev | PassRev | TotalRev | AvgBk');
-  salesTrend.slice(-14).forEach(r => write(`${r.date.padEnd(5)} | ${String(r.bookings).padStart(4)} | ${Number(r.bookingRevenue||0).toFixed(0).padStart(7)} | ${Number(r.policyRevenue||0).toFixed(0).padStart(7)} | ${Number(r.visaRevenue||0).toFixed(0).padStart(7)} | ${Number(r.passportRevenue||0).toFixed(0).padStart(7)} | ${Number(r.totalRevenue||r.revenue||0).toFixed(0).padStart(8)} | ${Number(r.avg||0).toFixed(0)}`));
+        write('Sales Trend (Last 14 days):', { bold: true });
+        write('Date   | Bkgs | BookRev | PolRev | VisaRev | PassRev | TotalRev | AvgBk');
+        salesTrend.slice(-14).forEach(r => write(`${dayjs(r.isoDate).format('DD/MM').padEnd(6)} | ${String(r.bookings).padStart(4)} | ${Number(r.bookingRevenue||0).toFixed(0).padStart(7)} | ${Number(r.policyRevenue||0).toFixed(0).padStart(7)} | ${Number(r.visaRevenue||0).toFixed(0).padStart(7)} | ${Number(r.passportRevenue||0).toFixed(0).padStart(7)} | ${Number(r.totalRevenue||r.revenue||0).toFixed(0).padStart(8)} | ${Number(r.avg||0).toFixed(0)}`));
         y += 2; pdf.line(marginX, y, pageWidth - marginX, y); y += 4;
-  // Productivity section removed
         // Recent Activity
         if (activity.length) {
           write('Recent Activity (max 20):', { bold: true });
-          activity.slice(0,20).forEach(a => write(`${dayjs(a.created_at).format('MM-DD HH:mm')}  ${a.action} ${a.entity_type}`));
+          activity.slice(0,20).forEach(a => write(`${dayjs(a.created_at).format('DD/MM/YYYY HH:mm')}  ${a.action} ${a.entity_type}`));
         }
-        pdf.save(`profile-analytics-${profile?.first_name || 'user'}.pdf`);
+        pdf.save(`profile-analytics-${fullName.replace(/\s+/g,'-').toLowerCase()}.pdf`);
         setSnackbar({open:true,message:'Report downloaded (fallback)',severity:'success'});
       } catch (err:any) {
         setSnackbar({open:true,message:`Fallback PDF failed: ${err.message||err}`,severity:'error'});
@@ -458,8 +463,7 @@ const ProfilePage: React.FC = () => {
             } else break;
           }
         }
-        pdf.save(`profile-analytics-${profile?.first_name || 'user'}.pdf`);
-        setSnackbar({open:true,message:'Report downloaded',severity:'success'});
+        pdf.save(`profile-analytics-${fullName.replace(/\s+/g,'-').toLowerCase()}.pdf`);
       } finally {
         document.body.removeChild(temp);
       }
@@ -518,7 +522,7 @@ const ProfilePage: React.FC = () => {
               <Grid container spacing={3} alignItems="center">
                 <Grid item>
                   <Stack alignItems="center" spacing={1}>
-                    <Avatar src={profile.avatar_url||''} sx={{ width:90, height:90, fontSize:'2rem', bgcolor:'primary.main' }}>{(profile.display_name||profile.first_name||'U').slice(0,1)}</Avatar>
+                    <Avatar src={profile.avatar_url||''} sx={{ width:90, height:90, fontSize:'2rem', bgcolor:'primary.main' }}>{fullName.slice(0,1)}</Avatar>
                     {edit && (
                       <Stack direction="row" spacing={1}>
                         <Button size="small" component="label" startIcon={<CloudUploadIcon />} disabled={uploadingAvatar} variant="outlined">
@@ -605,7 +609,7 @@ const ProfilePage: React.FC = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={salesTrend} margin={{ top: 5, right: 30, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tick={{ fontSize:12 }} />
+                    <XAxis dataKey="displayDate" tick={{ fontSize:12 }} />
                     <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize:12 }} />
                     <YAxis yAxisId="right" orientation="right" tick={{ fontSize:12 }} />
                     <RechartsTooltip formatter={(val:any, name:any)=> {
@@ -652,8 +656,8 @@ const ProfilePage: React.FC = () => {
           </Stack>
           <LocalizationProvider dateAdapter={AdapterDayjs}>
             <Stack direction={{ xs:'column', sm:'row' }} spacing={2} alignItems={{ xs:'stretch', sm:'center' }} sx={{ mb:2 }}>
-              <DatePicker label="From" value={salesFrom} onChange={setSalesFrom} slotProps={{ textField: { size:'small' } }} />
-              <DatePicker label="To" value={salesTo} onChange={setSalesTo} slotProps={{ textField: { size:'small' } }} />
+              <DatePicker format={DISPLAY_DATE} label="From" value={salesFrom} onChange={setSalesFrom} slotProps={{ textField: { size:'small' } }} />
+              <DatePicker format={DISPLAY_DATE} label="To" value={salesTo} onChange={setSalesTo} slotProps={{ textField: { size:'small' } }} />
               {(salesFrom || salesTo) && <Button size="small" onClick={()=>{ setSalesFrom(null); setSalesTo(null); }}>Clear</Button>}
               <Typography variant="caption" color="text.secondary" sx={{ ml:'auto' }}>{filteredSalesTrend.length} day(s)</Typography>
             </Stack>
@@ -674,7 +678,7 @@ const ProfilePage: React.FC = () => {
             <TableBody>
               {filteredSalesTrend.map(r => (
                 <TableRow key={r.date}>
-                  <TableCell>{r.date}</TableCell>
+                  <TableCell>{dayjs(r.isoDate).format(DISPLAY_DATE)}</TableCell>
                   <TableCell>{r.bookings}</TableCell>
                   <TableCell align="right">{Number(r.bookingRevenue||0).toFixed(2)}</TableCell>
                   <TableCell align="right">{Number(r.policyRevenue||0).toFixed(2)}</TableCell>
@@ -711,7 +715,7 @@ const ProfilePage: React.FC = () => {
             <TableBody>
               {activity.map(a => (
                 <TableRow key={a.id} hover>
-                  <TableCell>{dayjs(a.created_at).format('YYYY-MM-DD HH:mm')}</TableCell>
+                  <TableCell>{dayjs(a.created_at).format(DISPLAY_DATE_TIME)}</TableCell>
                   <TableCell>{a.action}</TableCell>
                   <TableCell>{a.entity_type}</TableCell>
                   <TableCell>{a.meta ? JSON.stringify(a.meta) : ''}</TableCell>

@@ -19,6 +19,7 @@ import {
         ToggleButtonGroup, ToggleButton
 } from '@mui/material'
 import { Grid } from '@mui/material';
+import ListSubheader from '@mui/material/ListSubheader';
 import dynamic from 'next/dynamic';
 import {
     Dashboard as DashboardIcon, People as PeopleIcon, Flight as FlightIcon, VpnKey as VpnKeyIcon,
@@ -37,14 +38,18 @@ import {
     LineChart, Line, PieChart, Pie, Cell,
 } from 'recharts'
 import dayjs from 'dayjs'
+import { DISPLAY_DATE, DISPLAY_DATE_TIME } from '../lib/dateFormats'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
+import { Divider } from '@mui/material';
 
 dayjs.extend(relativeTime)
+
+// Date formats now imported from lib/dateFormats
 
 // --- CONSTANTS & SHARED CONFIG ---
 const drawerWidth = 240;
@@ -115,8 +120,8 @@ const TableView = React.memo(({
                 />
                 <LocalizationProvider dateAdapter={AdapterDayjs}>
                     <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                        <DatePicker label="From" value={dateFrom} onChange={onDateFromChange} slotProps={{ textField: { size:'small' } }} />
-                        <DatePicker label="To" value={dateTo} onChange={onDateToChange} slotProps={{ textField: { size:'small' } }} />
+                        <DatePicker format={DISPLAY_DATE} label="From" value={dateFrom} onChange={onDateFromChange} slotProps={{ textField: { size:'small' } }} />
+                        <DatePicker format={DISPLAY_DATE} label="To" value={dateTo} onChange={onDateToChange} slotProps={{ textField: { size:'small' } }} />
                         {(dateFrom || dateTo) && <Button size="small" onClick={onClearDates}>Clear</Button>}
                         <Button variant="contained" startIcon={<AddIcon />} onClick={() => onOpenModal('add')}>Add {view.slice(0, -1)}</Button>
                     </Stack>
@@ -147,9 +152,10 @@ const TableView = React.memo(({
                                     let content: React.ReactNode = null;
 
                                     if (key.includes('date') && val) {
-                                        content = dayjs(val).format('YYYY-MM-DD');
+                                        content = dayjs(val).format(DISPLAY_DATE);
                                     } else if (key === 'client_id') {
-                                        content = clients.find(c => c.id === val)?.first_name || 'N/A';
+                                        const c = clients.find(c => c.id === val);
+                                        content = c ? [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' ') : 'N/A';
                                     } else if (key === 'booking_id') {
                                         content = bookings.find(b => b.id === val)?.pnr || 'N/A';
                                     } else if (view === 'Bookings' && key === 'segments') {
@@ -222,6 +228,8 @@ export default function DashboardPage() {
   const [openModal, setOpenModal] = useState(false)
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add')
   const [selectedItem, setSelectedItem] = useState<Client | Booking | Visa | Passport | Policy | null>(null)
+    // Search text used inside client select dropdown (modal forms)
+        // Removed clientSelectSearch (Autocomplete handles filtering)
   
   // Search and Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -241,6 +249,9 @@ export default function DashboardPage() {
   const [selectedClientForDocs, setSelectedClientForDocs] = useState<Client | null>(null);
   
   const [snackbar, setSnackbar] = useState<{open: boolean, message: string}>({open: false, message: ''});
+    // Duplicate client pre-insert handling
+    const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+    const [pendingClientCreate, setPendingClientCreate] = useState<{ payload: any; matches: Client[] } | null>(null);
   // NEW: collapsible sidebars state
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [showReminders, setShowReminders] = useState(true);
@@ -389,7 +400,10 @@ export default function DashboardPage() {
         // Use startOf('day') so diff in 'day' units is calendar-based (prevents tomorrow showing as today)
         const today = dayjs().startOf('day');
     const allReminders: Reminder[] = [];
-    const getClientName = (clientId: string) => clients.find(c => c.id === clientId)?.first_name || 'Unknown';
+        const getClientName = (clientId: string) => {
+            const c = clients.find(c => c.id === clientId);
+            return c ? [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' ') : 'Unknown';
+        };
 
     clients.forEach(client => {
                 const dob = dayjs(client.dob).startOf('day');
@@ -398,7 +412,7 @@ export default function DashboardPage() {
                 if (birthdayThisYear.isBefore(today, 'day')) birthdayThisYear = birthdayThisYear.add(1, 'year');
                 const daysLeft = birthdayThisYear.startOf('day').diff(today, 'day');
         if (daysLeft >= 0 && daysLeft <= 7) {
-            allReminders.push({ type: 'Birthday', id: client.id, name: `${client.first_name} ${client.last_name}`, dob: client.dob, days_left: daysLeft, client_id: client.id });
+            allReminders.push({ type: 'Birthday', id: client.id, name: [client.first_name, client.middle_name, client.last_name].filter(Boolean).join(' '), dob: client.dob, days_left: daysLeft, client_id: client.id });
         }
     });
 
@@ -442,13 +456,57 @@ export default function DashboardPage() {
 
   // --- CRUD OPERATIONS ---
   const handleAddItem = async (itemData: unknown) => {
-    const tableName = activeView.toLowerCase();
+        const tableName = activeView.toLowerCase();
+        // Pre-insert duplicate check only for clients
+        if (tableName === 'clients') {
+            const candidate: any = itemData || {};
+            const email = (candidate.email_id||'').trim();
+            const phone = (candidate.mobile_no||'').trim();
+            const first = (candidate.first_name||'').trim();
+            const last = (candidate.last_name||'').trim();
+            const dob = (candidate.dob||'').trim();
+            // Only run if we have at least one identifier
+            if (email || phone || (first && last && dob)) {
+                const orClauses: string[] = [];
+                const params: Record<string, any> = {};
+                // Build OR filters using Supabase's filter syntax via multiple .or groups
+                // We'll assemble a single OR string
+                if (email) orClauses.push(`email_id.eq.${email}`);
+                if (phone) orClauses.push(`mobile_no.eq.${phone}`);
+                if (first && last && dob) {
+                    // We'll do a case-insensitive match by pulling all possible matches and filtering client side
+                }
+                let query = supabase.from('clients').select('*');
+                if (orClauses.length) {
+                    query = query.or(orClauses.join(','));
+                }
+                const { data: dupData, error: dupErr } = await query.limit(50);
+                if (!dupErr) {
+                    let matches = dupData || [];
+                    if (first && last && dob) {
+                        const firstLc = first.toLowerCase();
+                        const lastLc = last.toLowerCase();
+                        matches = matches.filter(c => (
+                            (c.email_id && email && c.email_id === email) ||
+                            (c.mobile_no && phone && c.mobile_no === phone) ||
+                            ((c.first_name||'').toLowerCase() === firstLc && (c.last_name||'').toLowerCase() === lastLc && c.dob === dob)
+                        ));
+                    }
+                    // If we have any matches that are not the same as new unsaved (no id yet)
+                    if (Array.isArray(matches) && matches.length) {
+                        setPendingClientCreate({ payload: candidate, matches });
+                        setShowDuplicateDialog(true);
+                        return; // pause actual insert
+                    }
+                }
+            }
+        }
         const { error, data } = await supabase.from(tableName).insert([itemData]).select();
         if (error) setError(`Error adding item: ${error.message}`);
         else { 
-            const inserted = Array.isArray(data) ? data[0] : null;
-            logActivity('create', tableName, inserted?.id, { values: itemData });
-            fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`}); 
+                const inserted = Array.isArray(data) ? data[0] : null;
+                logActivity('create', tableName, inserted?.id, { values: itemData });
+                fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`}); 
         }
   };
 
@@ -778,7 +836,7 @@ export default function DashboardPage() {
         // Aggregate revenue across bookings, policies (premium), visas & passports (new amount fields)
         const spend: Record<string, number> = {};
         bookingData.forEach(b => { if (b.amount) spend[b.client_id] = (spend[b.client_id] || 0) + b.amount; });
-        policyData.forEach(p => { if (p.premium_amount) spend[p.client_id] = (spend[p.client_id] || 0) + p.premium_amount; });
+    policyData.forEach(p => { if (p.premium_amount) spend[p.client_id] = (spend[p.client_id] || 0) + p.premium_amount; });
         visaData.forEach(v => { const anyV: any = v as any; if (anyV.amount) spend[v.client_id] = (spend[v.client_id] || 0) + Number(anyV.amount)||0; });
         passportData.forEach(p => { const anyP: any = p as any; if (anyP.amount) spend[p.client_id] = (spend[p.client_id] || 0) + Number(anyP.amount)||0; });
         return Object.entries(spend)
@@ -1023,7 +1081,7 @@ export default function DashboardPage() {
                                         {opportunity.clients.length > 0 ? (
                                             opportunity.clients.map((client) => (
                                                 <TableRow hover key={client.id}>
-                                                    <TableCell>{client.first_name} {client.last_name}</TableCell>
+                                                    <TableCell>{[client.first_name, client.middle_name, client.last_name].filter(Boolean).join(' ')}</TableCell>
                                                     <TableCell>{client.email_id}</TableCell>
                                                     <TableCell>{client.mobile_no}</TableCell>
                                                 </TableRow>
@@ -1331,7 +1389,7 @@ export default function DashboardPage() {
                                                                                                                                                                                             />
                                                                                                                                                                                         </Grid>
                                                                                                         <Grid item xs={12} md={3}>
-                                                                                                            <DatePicker label="Departure Date" value={seg.departure_date ? dayjs(seg.departure_date) : null}
+                                                                                                               <DatePicker format={DISPLAY_DATE} label="Departure Date" value={seg.departure_date ? dayjs(seg.departure_date) : null}
                                                                                                                 onChange={(d)=>{
                                                                                                                     const next = [...(formData.segments||[])];
                                                                                                                     next[idx] = { ...next[idx], departure_date: d ? d.format('YYYY-MM-DD') : '' };
@@ -1358,15 +1416,18 @@ export default function DashboardPage() {
                                                                             </Stack>
                                                                         </Box>
                                                                     )}
-                      {key === 'client_id' && (
-                        <FormControl fullWidth size="small">
-                          <InputLabel>Client</InputLabel>
-                          <Select name="client_id" label="Client" value={formData.client_id || ''} onChange={(e)=> setFormData((p:any)=>({...p, client_id: e.target.value, booking_id: ''}))}>
-                            <MenuItem value=""><em>None</em></MenuItem>
-                            {clientsForSelect.map(c => <MenuItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</MenuItem>)}
-                          </Select>
-                        </FormControl>
-                      )}
+                                            {key === 'client_id' && (
+                                                <Autocomplete
+                                                    size="small"
+                                                    fullWidth
+                                                    options={clients}
+                                                    getOptionLabel={(c)=> [c.first_name,c.middle_name,c.last_name].filter(Boolean).join(' ')}
+                                                    isOptionEqualToValue={(a,b)=> a.id===b.id}
+                                                    value={clients.find(c=> c.id === formData.client_id) || null}
+                                                    onChange={(e,val)=> setFormData((p:any)=> ({ ...p, client_id: val? val.id : '', booking_id: '' }))}
+                                                    renderInput={(params)=><TextField {...params} label="Client" />}
+                                                />
+                                            )}
                       {key === 'booking_id' && (activeView === 'Policies' || activeView === 'Client Insight') && (
                         <FormControl fullWidth size="small">
                           <InputLabel>Booking</InputLabel>
@@ -1377,7 +1438,7 @@ export default function DashboardPage() {
                         </FormControl>
                       )}
                       {(key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && !key.endsWith('_id') && (
-                        <DatePicker label={label} value={formData[key] ? dayjs(formData[key]) : null} onChange={(d)=>handleDateChange(key,d)} slotProps={{ textField: { fullWidth:true, size:'small' } }} />
+                        <DatePicker format={DISPLAY_DATE} label={label} value={formData[key] ? dayjs(formData[key]) : null} onChange={(d)=>handleDateChange(key,d)} slotProps={{ textField: { fullWidth:true, size:'small' } }} />
                       )}
                       {key === 'status' && (
                         <FormControl fullWidth size="small">
@@ -1418,6 +1479,69 @@ export default function DashboardPage() {
         </DialogActions>
     </Dialog>
   );
+
+    const DuplicateClientDialog = () => {
+        if (!pendingClientCreate) return null;
+        const { matches, payload } = pendingClientCreate;
+        const forceCreate = async () => {
+            setShowDuplicateDialog(false);
+            const tableName = 'clients';
+            const { error, data } = await supabase.from(tableName).insert([payload]).select();
+            if (error) setError(`Error adding item: ${error.message}`);
+            else {
+                const inserted = Array.isArray(data) ? data[0] : null;
+                logActivity('create', tableName, inserted?.id, { values: payload, duplicate_override: true });
+                fetchData(); handleCloseModal(); setSnackbar({ open: true, message: 'Client added (duplicate override).' });
+            }
+            setPendingClientCreate(null);
+        };
+        return (
+            <Dialog open={showDuplicateDialog} onClose={()=>{ setShowDuplicateDialog(false); setPendingClientCreate(null); }} maxWidth="sm" fullWidth>
+                <DialogTitle>Possible Duplicate Client</DialogTitle>
+                <DialogContent dividers>
+                    <Alert severity="warning" sx={{ mb:2 }}>We found existing clients matching the details you entered. Select one to use instead of creating a new record, or force create anyway.</Alert>
+                    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 240 }}>
+                        <Table size="small" stickyHeader>
+                            <TableHead>
+                                <TableRow>
+                                    <TableCell>Name</TableCell>
+                                    <TableCell>Email</TableCell>
+                                    <TableCell>Phone</TableCell>
+                                    <TableCell>DOB</TableCell>
+                                    <TableCell align="right">Action</TableCell>
+                                </TableRow>
+                            </TableHead>
+                            <TableBody>
+                                {matches.map(m => (
+                                    <TableRow key={m.id} hover>
+                                        <TableCell>{[m.first_name, m.middle_name, m.last_name].filter(Boolean).join(' ')}</TableCell>
+                                        <TableCell>{m.email_id}</TableCell>
+                                        <TableCell>{m.mobile_no}</TableCell>
+                                        <TableCell>{m.dob ? dayjs(m.dob).format(DISPLAY_DATE) : ''}</TableCell>
+                                        <TableCell align="right">
+                                            <Button size="small" variant="outlined" onClick={()=>{ setShowDuplicateDialog(false); setPendingClientCreate(null); handleCloseModal(); setSnackbar({ open:true, message: 'Using existing client.'}); }}>
+                                                Use
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </TableContainer>
+                    <Box sx={{ mt:2 }}>
+                        <Typography variant="body2" color="text.secondary">New client you attempted to add:</Typography>
+                        <Typography variant="body2" sx={{ fontStyle:'italic' }}>
+                            {[payload.first_name, payload.middle_name, payload.last_name].filter(Boolean).join(' ')} • {payload.email_id || 'No Email'} • {payload.mobile_no || 'No Phone'}
+                        </Typography>
+                    </Box>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={()=>{ setShowDuplicateDialog(false); setPendingClientCreate(null); }}>Cancel</Button>
+                    <Button onClick={forceCreate} color="warning" variant="contained">Create Anyway</Button>
+                </DialogActions>
+            </Dialog>
+        );
+    };
 
   const DocumentUploadModal = ({ onShowSnackbar }: { onShowSnackbar: (state: {open: boolean, message: string}) => void }) => {
     const [documents, setDocuments] = useState<ClientDocument[]>([]);
@@ -1509,7 +1633,7 @@ export default function DashboardPage() {
 
     return (
         <Dialog open={docModalOpen} onClose={handleCloseDocModal} maxWidth="md" fullWidth>
-            <DialogTitle>Documents for {selectedClientForDocs?.first_name} {selectedClientForDocs?.last_name}</DialogTitle>
+            <DialogTitle>Documents for {[selectedClientForDocs?.first_name, selectedClientForDocs?.middle_name, selectedClientForDocs?.last_name].filter(Boolean).join(' ')}</DialogTitle>
             <DialogContent dividers>
                 {docError && <Alert severity="error" sx={{mb: 2}}>{docError}</Alert>}
                 <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -1537,7 +1661,7 @@ export default function DashboardPage() {
                                 </>
                             }>
                                 <ListItemIcon><DescriptionIcon /></ListItemIcon>
-                                <ListItemText primary={doc.file_name} secondary={`Uploaded: ${dayjs(doc.created_at).format('YYYY-MM-DD HH:mm')}`} />
+                                <ListItemText primary={doc.file_name} secondary={`Uploaded: ${dayjs(doc.created_at).format(DISPLAY_DATE_TIME)}`} />
                             </ListItem>
                         ))
                     ) : (
@@ -1557,14 +1681,14 @@ export default function DashboardPage() {
     const getReminderMessage = (r: Reminder) => {
         let message = `${r.type} for ${r.name}`;
                 if (r.type.includes('Passport') || r.type.includes('Visa') || r.type.includes('Policy')) {
-                        message += ` expiring on ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}`;
+                        message += ` expiring on ${dayjs(r.expiry_date || r.end_date).format(DISPLAY_DATE)}`;
                         if (r.type === 'Visa' && (r as any).country) {
                             message += ` • Country: ${(r as any).country}`;
                         }
         } else if (r.type === 'Booking') {
-            message += ` check-in on ${dayjs(r.departure_date).format('YYYY-MM-DD')}`;
+            message += ` check-in on ${dayjs(r.departure_date).format(DISPLAY_DATE)}`;
         } else if (r.type === 'Birthday') {
-            message += ` on ${dayjs(r.dob).format('MM-DD')}`;
+            message += ` on ${dayjs(r.dob).format('DD/MM')}`;
         }
         if (r.days_left !== undefined && r.days_left >= 0) {
             message += ` (${r.days_left === 0 ? 'Today' : `in ${r.days_left} days`}).`;
@@ -1696,6 +1820,7 @@ export default function DashboardPage() {
                     {openModal && <FormModal />}
                     {docModalOpen && <DocumentUploadModal onShowSnackbar={setSnackbar} />}
                     <ConfirmationDialog />
+                    <DuplicateClientDialog />
                     <Snackbar
                         open={snackbar.open}
                         autoHideDuration={6000}
@@ -1801,6 +1926,7 @@ const ClientDocumentsView = ({ client, onUpdate, onShowSnackbar }: { client: Cli
         const filePath = `${client.id}/${Date.now()}_${file.name}`;
         
         setUploading(true);
+        onShowSnackbar({ open: true, message: 'Uploading document...' });
         const { error: uploadError } = await supabase.storage.from('client-documents').upload(filePath, file);
 
         if (uploadError) {
@@ -1877,7 +2003,7 @@ const ClientDocumentsView = ({ client, onUpdate, onShowSnackbar }: { client: Cli
                         </>
                     }>
                         <ListItemIcon><DescriptionIcon /></ListItemIcon>
-                        <ListItemText primary={doc.file_name} secondary={`Uploaded: ${dayjs(doc.created_at).format('YYYY-MM-DD')}`} />
+                        <ListItemText primary={doc.file_name} secondary={`Uploaded: ${dayjs(doc.created_at).format(DISPLAY_DATE)}`} />
                     </ListItem>
                 )) : <ListItem><ListItemText primary="No documents found." sx={{color: 'text.secondary'}} /></ListItem>}
             </List>
@@ -2062,10 +2188,10 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     
     const getReminderIcon = (type: string) => ({ Birthday: <CakeIcon color="secondary" />, Passport: <CreditCardIcon color="error" />, Visa: <VpnKeyIcon color="error" />, Policy: <PolicyIcon color="error" />, Booking: <FlightIcon color="info" /> }[type] || <NotificationsIcon />);
 
-    const bookingCols = [ {key: 'pnr', label: 'PNR'}, {key: 'destination', label: 'Destination'}, {key: 'check_in', label: 'Check-in', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'check_out', label: 'Check-out', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'amount', label: 'Amount', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'status', label: 'Status'}, ];
-    const visaCols = [ {key: 'country', label: 'Country'}, {key: 'visa_type', label: 'Type'}, {key: 'visa_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
-    const passportCols = [ {key: 'passport_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
-    const policyCols = [ {key: 'policy_number', label: 'Number'}, {key: 'insurer', label: 'Insurer'}, {key: 'sum_insured', label: 'Sum Insured', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'premium_amount', label: 'Premium', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'start_date', label: 'Start', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, {key: 'end_date', label: 'End', render: (val: string) => dayjs(val).format('YYYY-MM-DD')}, ];
+    const bookingCols = [ {key: 'pnr', label: 'PNR'}, {key: 'destination', label: 'Destination'}, {key: 'check_in', label: 'Check-in', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'check_out', label: 'Check-out', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'amount', label: 'Amount', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'status', label: 'Status'}, ];
+    const visaCols = [ {key: 'country', label: 'Country'}, {key: 'visa_type', label: 'Type'}, {key: 'visa_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
+    const passportCols = [ {key: 'passport_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
+    const policyCols = [ {key: 'policy_number', label: 'Number'}, {key: 'insurer', label: 'Insurer'}, {key: 'sum_insured', label: 'Sum Insured', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'premium_amount', label: 'Premium', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'start_date', label: 'Start', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'end_date', label: 'End', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
 
     return (
         <Fade in={true}>
@@ -2093,7 +2219,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                     <ListItem key={c.id} disablePadding divider selected={selectedClient?.id === c.id}>
                                         <ListItemButton onClick={() => setSelectedClient(c)}>
                                             <ListItemIcon><Avatar>{(c.first_name && c.first_name[0]) || '?'}</Avatar></ListItemIcon>
-                                            <ListItemText primary={`${c.first_name} ${c.last_name}`} secondary={`${c.email_id} • ${c.mobile_no}`} />
+                                            <ListItemText primary={[c.first_name,c.middle_name,c.last_name].filter(Boolean).join(' ')} secondary={`${c.email_id} • ${c.mobile_no}`} />
                                         </ListItemButton>
                                     </ListItem>
                                 ))}
@@ -2115,15 +2241,15 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                 {/* Client Summary Card */}
                                 <Grid item xs={12}>
                                     <Paper elevation={3} sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 3, borderRadius: 2 }}>
-                                        <Avatar sx={{ width: 90, height: 90, bgcolor: 'primary.main', fontSize: '2.5rem' }}>{selectedClient?.first_name?.[0]}</Avatar>
+                                        <Avatar sx={{ width: 90, height: 90, bgcolor: 'primary.main', fontSize: '2.5rem' }}>{(selectedClient?.first_name||selectedClient?.last_name||'?')[0]}</Avatar>
                                         <Box flexGrow={1}>
                                             <Typography variant="h4" component="div" sx={{fontWeight: 'bold', mb: 0.5}}>
-                                                {selectedClient?.first_name} {selectedClient?.middle_name ? `${selectedClient.middle_name} ` : ''}{selectedClient?.last_name}
+                                                {[selectedClient?.first_name, selectedClient?.middle_name, selectedClient?.last_name].filter(Boolean).join(' ')}
                                             </Typography>
                                             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="flex-start">
                                                 <Chip icon={<EmailIcon fontSize="small" />} label={selectedClient?.email_id ?? ''} size="small" />
                                                 <Chip icon={<PhoneIcon fontSize="small" />} label={selectedClient?.mobile_no ?? ''} size="small" />
-                                                <Chip icon={<CakeIcon fontSize="small" />} label={`DOB: ${selectedClient?.dob && dayjs(selectedClient?.dob).isValid() ? dayjs(selectedClient?.dob).format('YYYY-MM-DD') : 'N/A'}`} size="small" />
+                                                <Chip icon={<CakeIcon fontSize="small" />} label={`DOB: ${selectedClient?.dob && dayjs(selectedClient?.dob).isValid() ? dayjs(selectedClient?.dob).format(DISPLAY_DATE) : 'N/A'}`} size="small" />
                                                 <Chip label={`Nationality: ${selectedClient?.nationality ?? 'N/A'}`} size="small" />
                                             </Stack>
                                             {/* --- Added Detailed Client Info Grid --- */}
@@ -2143,7 +2269,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                                       { label: 'Last Name', value: client.last_name },
                                                       { label: 'Email', value: client.email_id },
                                                       { label: 'Phone', value: client.mobile_no },
-                                                      { label: 'DOB', value: dayjs(client.dob).isValid() ? dayjs(client.dob).format('YYYY-MM-DD') : 'N/A' },
+                                                      { label: 'DOB', value: dayjs(client.dob).isValid() ? dayjs(client.dob).format(DISPLAY_DATE) : 'N/A' },
                                                       { label: 'Age', value: age },
                                                       { label: 'Nationality', value: client.nationality },
                                                       { label: 'Total Bookings', value: clientData.bookings.length },
@@ -2228,9 +2354,9 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                                             secondary={
                                                                 <>
                                                                     {r.type.includes('Passport') || r.type.includes('Visa') || r.type.includes('Policy') ? 
-                                                                        `Expires: ${dayjs(r.expiry_date || r.end_date).format('YYYY-MM-DD')}${r.type === 'Visa' && (r as any).country ? ` • Country: ${(r as any).country}` : ''}` : ''}
-                                                                    {r.type === 'Booking' ? `Departure: ${dayjs(r.departure_date).format('YYYY-MM-DD')}` : ''}
-                                                                    {r.type === 'Birthday' ? `Birthday: ${dayjs(r.dob).format('MM-DD')}` : ''}
+                                                                        `Expires: ${dayjs(r.expiry_date || r.end_date).format(DISPLAY_DATE)}${r.type === 'Visa' && (r as any).country ? ` • Country: ${(r as any).country}` : ''}` : ''}
+                                                                    {r.type === 'Booking' ? `Departure: ${dayjs(r.departure_date).format(DISPLAY_DATE)}` : ''}
+                                                                    {r.type === 'Birthday' ? `Birthday: ${dayjs(r.dob).format('DD/MM')}` : ''}
                                                                     {r.days_left !== undefined && r.days_left >= 0 && 
                                                                         <Typography component="span" variant="body2" sx={{ display: 'block' }} color={r.days_left <= 7 ? "error.main" : "warning.main"}>
                                                                             {r.days_left === 0 ? 'Due Today' : `In ${r.days_left} days`}
@@ -2290,7 +2416,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                                                         </Tooltip>
                                                                     </>
                                                                 }>
-                                                                    <ListItemText primary={note.note} secondary={`By ${note.user} on ${dayjs(note.created_at).format('YYYY-MM-DD HH:mm')}`} />
+                                                                    <ListItemText primary={note.note} secondary={`By ${note.user} on ${dayjs(note.created_at).format(DISPLAY_DATE_TIME)}`} />
                                                                 </ListItem>
                                                             ))
                                                         ) : (
