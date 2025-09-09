@@ -813,8 +813,29 @@ export default function DashboardPage() {
         setOpportunityTab(newValue);
     };
 
+    // Derive user-created entity id sets from activity log (fallback approach when tables lack explicit created_by columns)
+    const userCreated = useMemo(() => {
+        const sets = { clients: new Set<string>(), bookings: new Set<string>(), visas: new Set<string>(), passports: new Set<string>(), policies: new Set<string>() };
+        userActivity.forEach(a => {
+            if (a.action === 'create' && a.entity_type && a.entity_id) {
+                const t = a.entity_type.toLowerCase();
+                if (t === 'clients') sets.clients.add(String(a.entity_id));
+                else if (t === 'bookings') sets.bookings.add(String(a.entity_id));
+                else if (t === 'visas') sets.visas.add(String(a.entity_id));
+                else if (t === 'passports') sets.passports.add(String(a.entity_id));
+                else if (t === 'policies') sets.policies.add(String(a.entity_id));
+            }
+        });
+        return sets;
+    }, [userActivity]);
+    const isUser = userMetricMode === 'me';
+    const scopedClients = useMemo(() => isUser ? clientData.filter(c => userCreated.clients.has(c.id)) : clientData, [isUser, clientData, userCreated]);
+    const scopedBookings = useMemo(() => isUser ? bookingData.filter(b => userCreated.bookings.has(b.id)) : bookingData, [isUser, bookingData, userCreated]);
+    const scopedVisas = useMemo(() => isUser ? visaData.filter(v => userCreated.visas.has(v.id)) : visaData, [isUser, visaData, userCreated]);
+    const scopedPassports = useMemo(() => isUser ? passportData.filter(p => userCreated.passports.has(p.id)) : passportData, [isUser, passportData, userCreated]);
+    const scopedPolicies = useMemo(() => isUser ? policyData.filter(p => userCreated.policies.has(p.id)) : policyData, [isUser, policyData, userCreated]);
     const nationalityData = useMemo(() => {
-        const agg = clientData.reduce((acc: Record<string, { label: string; count: number }>, c: Client) => {
+        const agg = scopedClients.reduce((acc: Record<string, { label: string; count: number }>, c: Client) => {
             const raw = c.nationality || 'Unknown';
             const key = raw.toLowerCase();
             if (!acc[key]) acc[key] = { label: raw, count: 0 };
@@ -822,31 +843,31 @@ export default function DashboardPage() {
             return acc;
         }, {});
         return Object.values(agg).map(({ label, count }) => ({ name: label, value: count }));
-    }, [clientData]);
+    }, [scopedClients]);
 
     const bookingsByMonthData = useMemo(() => {
         // Use stable ref timestamp so SSR vs CSR doesn't mismatch (hydration safety)
         const base = nowRef.current;
         const counts = Array(12).fill(0).map((_, i) => ({ name: base.month(i).format('MMM'), bookings: 0 }));
-        bookingData.forEach((b: Booking) => { const m = dayjs(b.check_in).month(); if(m>=0) counts[m].bookings++; });
+        scopedBookings.forEach((b: Booking) => { const m = dayjs(b.check_in).month(); if(m>=0) counts[m].bookings++; });
         return counts;
-    }, [bookingData]);
+    }, [scopedBookings]);
     
     const topClientsByRevenue = useMemo(() => {
         // Aggregate revenue across bookings, policies (premium), visas & passports (new amount fields)
         const spend: Record<string, number> = {};
-        bookingData.forEach(b => { if (b.amount) spend[b.client_id] = (spend[b.client_id] || 0) + b.amount; });
-    policyData.forEach(p => { if (p.premium_amount) spend[p.client_id] = (spend[p.client_id] || 0) + p.premium_amount; });
-        visaData.forEach(v => { const anyV: any = v as any; if (anyV.amount) spend[v.client_id] = (spend[v.client_id] || 0) + Number(anyV.amount)||0; });
-        passportData.forEach(p => { const anyP: any = p as any; if (anyP.amount) spend[p.client_id] = (spend[p.client_id] || 0) + Number(anyP.amount)||0; });
+        scopedBookings.forEach(b => { if (b.amount) spend[b.client_id] = (spend[b.client_id] || 0) + b.amount; });
+        scopedPolicies.forEach(p => { if (p.premium_amount) spend[p.client_id] = (spend[p.client_id] || 0) + p.premium_amount; });
+        scopedVisas.forEach(v => { const anyV: any = v as any; if (anyV.amount) spend[v.client_id] = (spend[v.client_id] || 0) + Number(anyV.amount)||0; });
+        scopedPassports.forEach(p => { const anyP: any = p as any; if (anyP.amount) spend[p.client_id] = (spend[p.client_id] || 0) + Number(anyP.amount)||0; });
         return Object.entries(spend)
             .sort((a,b)=> b[1]-a[1])
             .slice(0,5)
-            .map(([clientId,total])=> ({ name: clientData.find(c=>c.id===clientId)?.first_name || 'Unknown', revenue: total }));
-    }, [bookingData, policyData, visaData, passportData, clientData]);
+            .map(([clientId,total])=> ({ name: scopedClients.find(c=>c.id===clientId)?.first_name || 'Unknown', revenue: total }));
+    }, [scopedBookings, scopedPolicies, scopedVisas, scopedPassports, scopedClients]);
 
     const bookingStatusData = useMemo(() => {
-        const statusCounts = bookingData.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
+        const statusCounts = scopedBookings.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
             const raw = booking.status || 'Pending';
             const key = raw.toLowerCase();
             if (!acc[key]) acc[key] = { label: raw, count: 0 };
@@ -854,14 +875,14 @@ export default function DashboardPage() {
             return acc;
         }, {});
         return Object.values(statusCounts).map(({ label, count }) => ({ name: label, value: count }));
-    }, [bookingData]);
+    }, [scopedBookings]);
 
     const crossSellOpportunities = useMemo(() => {
-        const allClientIds = new Set(clientData.map(c => c.id));
-        const clientsWithBookings = new Set(bookingData.map(b => b.client_id));
-        const clientsWithPolicies = new Set(policyData.map(p => p.client_id));
-        const clientsWithVisas = new Set(visaData.map(v => v.client_id));
-        const clientsWithPassports = new Set(passportData.map(p => p.client_id));
+        const allClientIds = new Set(scopedClients.map(c => c.id));
+        const clientsWithBookings = new Set(scopedBookings.map(b => b.client_id));
+        const clientsWithPolicies = new Set(scopedPolicies.map(p => p.client_id));
+        const clientsWithVisas = new Set(scopedVisas.map(v => v.client_id));
+        const clientsWithPassports = new Set(scopedPassports.map(p => p.client_id));
         const today = dayjs();
 
         const opportunities: Record<string, string[]> = {
@@ -873,12 +894,12 @@ export default function DashboardPage() {
 
         // Potential Re-engagement: Clients who haven't booked in the last year
         const oneYearAgo = today.subtract(1, 'year');
-        const recentBookers = new Set(bookingData.filter(b => dayjs(b.created_at).isAfter(oneYearAgo)).map(b => b.client_id));
+    const recentBookers = new Set(scopedBookings.filter(b => dayjs(b.created_at).isAfter(oneYearAgo)).map(b => b.client_id));
         opportunities['Potential Re-engagement'] = [...clientsWithBookings].filter(id => !recentBookers.has(id));
 
         // Clients with expiring passports (next 6 months)
         const sixMonthsFromNow = today.add(6, 'months');
-        const expiringPassportClientIds = new Set(passportData.filter(p => {
+    const expiringPassportClientIds = new Set(scopedPassports.filter(p => {
             const expiry = dayjs(p.expiry_date);
             return expiry.isAfter(today) && expiry.isBefore(sixMonthsFromNow);
         }).map(p => p.client_id));
@@ -886,12 +907,12 @@ export default function DashboardPage() {
 
         return Object.entries(opportunities).map(([type, clientIds]) => ({
             type,
-            clients: clientIds.map(id => clientData.find(c => c.id === id)).filter((c): c is Client => Boolean(c)).slice(0, 10)
+            clients: clientIds.map(id => scopedClients.find(c => c.id === id)).filter((c): c is Client => Boolean(c)).slice(0, 10)
         }));
-    }, [clientData, bookingData, policyData, visaData, passportData]);
+    }, [scopedClients, scopedBookings, scopedPolicies, scopedVisas, scopedPassports]);
 
     const vendorPerformanceData = useMemo(() => {
-        const vendorRevenue = bookingData.reduce((acc: Record<string, { label: string; total: number }>, booking: Booking) => {
+        const vendorRevenue = scopedBookings.reduce((acc: Record<string, { label: string; total: number }>, booking: Booking) => {
             if (booking.vendor && booking.amount) {
                 const key = booking.vendor.toLowerCase();
                 if (!acc[key]) acc[key] = { label: booking.vendor, total: 0 };
@@ -904,11 +925,11 @@ export default function DashboardPage() {
             .sort((a, b) => b.total - a.total)
             .slice(0, 7)
             .map(({ label, total }) => ({ name: label, 'Revenue': total }));
-    }, [bookingData]);
+    }, [scopedBookings]);
     
     const clientAgeData = useMemo(() => {
         const ageGroups: Record<string, number> = { '18-30': 0, '31-45': 0, '46-60': 0, '61+': 0, 'Unknown': 0 };
-        clientData.forEach((c: Client) => {
+        scopedClients.forEach((c: Client) => {
             if (!c.dob) {
                 ageGroups.Unknown++;
                 return;
@@ -920,10 +941,10 @@ export default function DashboardPage() {
             else ageGroups['61+']++;
         });
         return Object.entries(ageGroups).map(([name, value]) => ({ name, 'Number of Clients': value }));
-    }, [clientData]);
+    }, [scopedClients]);
 
     const popularDestinations = useMemo(() => {
-        const destinationCounts = bookingData.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
+        const destinationCounts = scopedBookings.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
             const raw = booking.destination || 'N/A';
             const key = raw.toLowerCase();
             if (!acc[key]) acc[key] = { label: raw, count: 0 };
@@ -935,10 +956,10 @@ export default function DashboardPage() {
             .sort((a, b) => b.count - a.count)
             .slice(0, 7)
             .map(({ label, count }) => ({ name: label, 'Bookings': count }));
-    }, [bookingData]);
+    }, [scopedBookings]);
 
     const bookingTypeData = useMemo(() => {
-        const typeCounts = bookingData.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
+        const typeCounts = scopedBookings.reduce((acc: Record<string, { label: string; count: number }>, booking: Booking) => {
             const raw = booking.booking_type || 'Other';
             const key = raw.toLowerCase();
             if (!acc[key]) acc[key] = { label: raw, count: 0 };
@@ -946,17 +967,17 @@ export default function DashboardPage() {
             return acc;
         }, {});
         return Object.values(typeCounts).map(({ label, count }) => ({ name: label, value: count }));
-    }, [bookingData]);
+    }, [scopedBookings]);
     
     const avgTripDuration = useMemo(() => {
-        const validTrips = bookingData.filter((b: Booking) => b.check_in && b.check_out);
+        const validTrips = scopedBookings.filter((b: Booking) => b.check_in && b.check_out);
         if (validTrips.length === 0) return 0;
         const totalDays = validTrips.reduce((sum: number, b: Booking) => {
             const duration = dayjs(b.check_out).diff(dayjs(b.check_in), 'day');
             return sum + (duration > 0 ? duration : 0);
         }, 0);
         return Math.round(totalDays / validTrips.length);
-    }, [bookingData]);
+    }, [scopedBookings]);
 
     const expiringRemindersCount = useMemo(() => {
         return globalReminders.filter((r: Reminder) => r.type !== 'Birthday' && r.days_left! <= 30 && r.days_left! >=0).length;
@@ -994,7 +1015,6 @@ export default function DashboardPage() {
             };
         }, [bookingData, policyData, visaData, passportData, clientData]);
 
-        const isUser = userMetricMode==='me';
         const activeKpis = isUser ? userKpis : globalKpis;
         return (
         <Fade in={true}>
