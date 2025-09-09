@@ -31,7 +31,7 @@ import {
     ExpandMore as ExpandMoreIcon, AccountBox as AccountBoxIcon, Download as DownloadIcon, Share as ShareIcon,
     Analytics as AnalyticsIcon, Notes as NotesIcon, Star as StarIcon, Email as EmailIcon, Phone as PhoneIcon,
     Visibility as VisibilityIcon, ExpandLess as ExpandLessIcon, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon,
-    Person as PersonIcon, Undo as UndoIcon
+    Person as PersonIcon, Undo as UndoIcon, Info as InfoIcon, ContentCopy as ContentCopyIcon, Close as MuiCloseIcon
 } from '@mui/icons-material'
 import NextLink from 'next/link'
 import {
@@ -40,6 +40,7 @@ import {
 } from 'recharts'
 import dayjs from 'dayjs'
 import { DISPLAY_DATE, DISPLAY_DATE_TIME } from '../lib/dateFormats'
+import { formatCurrency, CURRENCY } from '../lib/currency'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
@@ -1196,8 +1197,8 @@ export default function DashboardPage() {
                                     <BarChart data={topClientsByRevenue} margin={{top: 20, right: 30, left: 20, bottom: 5}}>
                                         <CartesianGrid strokeDasharray="3 3" />
                                         <XAxis dataKey="name" />
-                                        <YAxis allowDecimals={false} label={{ value: 'Revenue ($)', angle: -90, position: 'insideLeft' }} />
-                                        <RechartsTooltip formatter={(value) => `$${value}`} />
+                                        <YAxis allowDecimals={false} label={{ value: `Revenue (${CURRENCY})`, angle: -90, position: 'insideLeft' }} />
+                                        <RechartsTooltip formatter={(value) => formatCurrency(Number(value),0)} />
                                         <Legend />
                                         <Bar dataKey="revenue" fill="#AF19FF" radius={[4, 4, 0, 0]} barSize={30} />
                                     </BarChart>
@@ -1213,8 +1214,8 @@ export default function DashboardPage() {
                                     <BarChart data={vendorPerformanceData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                                         <CartesianGrid strokeDasharray="3 3" />
                                         <XAxis dataKey="name" angle={-15} textAnchor="end" height={60} interval={0} style={{fontSize: '0.75rem'}} />
-                                        <YAxis allowDecimals={false} label={{ value: 'Revenue ($)', angle: -90, position: 'insideLeft' }} />
-                                        <RechartsTooltip formatter={(value: number) => `$${value}`} />
+                                        <YAxis allowDecimals={false} label={{ value: `Revenue (${CURRENCY})`, angle: -90, position: 'insideLeft' }} />
+                                        <RechartsTooltip formatter={(value: number) => formatCurrency(Number(value),0)} />
                                         <Legend />
                                         <Bar dataKey="Revenue" fill="#FF6666" radius={[4, 4, 0, 0]} barSize={30} />
                                     </BarChart>
@@ -2270,10 +2271,42 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
     
     const getReminderIcon = (type: string) => ({ Birthday: <CakeIcon color="secondary" />, Passport: <CreditCardIcon color="error" />, Visa: <VpnKeyIcon color="error" />, Policy: <PolicyIcon color="error" />, Booking: <FlightIcon color="info" /> }[type] || <NotificationsIcon />);
 
-    const bookingCols = [ {key: 'pnr', label: 'PNR'}, {key: 'destination', label: 'Destination'}, {key: 'check_in', label: 'Check-in', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'check_out', label: 'Check-out', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'amount', label: 'Amount', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'status', label: 'Status'}, ];
-    const visaCols = [ {key: 'country', label: 'Country'}, {key: 'visa_type', label: 'Type'}, {key: 'visa_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
-    const passportCols = [ {key: 'passport_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> `$${Number(val||0).toFixed(2)}`}, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
-    const policyCols = [ {key: 'policy_number', label: 'Number'}, {key: 'insurer', label: 'Insurer'}, {key: 'sum_insured', label: 'Sum Insured', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'premium_amount', label: 'Premium', render: (val: number) => `$${val?.toFixed(2)}`}, {key: 'start_date', label: 'Start', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'end_date', label: 'End', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
+    const bookingCols = [ {key: 'pnr', label: 'PNR'}, {key: 'destination', label: 'Destination'}, {key: 'check_in', label: 'Check-in', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'check_out', label: 'Check-out', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'amount', label: 'Amount', render: (val: number) => formatCurrency(val) }, {key: 'status', label: 'Status'}, ];
+    const visaCols = [ {key: 'country', label: 'Country'}, {key: 'visa_type', label: 'Type'}, {key: 'visa_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> formatCurrency(val) }, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
+    const passportCols = [ {key: 'passport_number', label: 'Number'}, {key: 'amount', label: 'Amount', render: (val: number)=> formatCurrency(val) }, {key: 'issue_date', label: 'Issue Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'expiry_date', label: 'Expiry Date', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
+    const policyCols = [ {key: 'policy_number', label: 'Number'}, {key: 'insurer', label: 'Insurer'}, {key: 'sum_insured', label: 'Sum Insured', render: (val: number) => formatCurrency(val)}, {key: 'premium_amount', label: 'Premium', render: (val: number) => formatCurrency(val)}, {key: 'start_date', label: 'Start', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, {key: 'end_date', label: 'End', render: (val: string) => dayjs(val).format(DISPLAY_DATE)}, ];
+
+    // Department detail dialog state
+    const [deptDialogOpen, setDeptDialogOpen] = useState(false);
+    const [deptType, setDeptType] = useState<'Bookings' | 'Visas' | 'Passports' | 'Policies' | null>(null);
+    const openDeptDialog = (type: 'Bookings' | 'Visas' | 'Passports' | 'Policies') => { setDeptType(type); setDeptDialogOpen(true); };
+    const closeDeptDialog = () => { setDeptDialogOpen(false); setDeptType(null); };
+    const deptConfig = useMemo(()=> ({
+        'Bookings': { data: clientData.bookings, columns: bookingCols, view: 'Bookings' },
+        'Visas': { data: clientData.visas, columns: visaCols, view: 'Visas' },
+        'Passports': { data: clientData.passports, columns: passportCols, view: 'Passports' },
+        'Policies': { data: clientData.policies, columns: policyCols, view: 'Policies' },
+    } as const), [clientData, bookingCols, visaCols, passportCols, policyCols]);
+
+    // Detailed record view state
+    const [recordDetailOpen, setRecordDetailOpen] = useState(false);
+    const [recordDetail, setRecordDetail] = useState<any | null>(null);
+    const openRecordDetail = (row: any) => { setRecordDetail(row); setRecordDetailOpen(true); };
+    const closeRecordDetail = () => { setRecordDetailOpen(false); setRecordDetail(null); };
+    const copyRecordJson = () => { if(recordDetail){ navigator.clipboard.writeText(JSON.stringify(recordDetail, null, 2)); onShowSnackbar({ open:true, message: 'Copied record JSON'}); } };
+    const formatFieldValue = (key: string, val: any) => {
+        if (val == null || val === '') return '—';
+        if (typeof val === 'number') return key.toLowerCase().includes('amount') ? formatCurrency(val) : val;
+        if (typeof val === 'string') {
+            if (/date|_at|issued|expiry|start|end|check_in|check_out/i.test(key) && dayjs(val).isValid()) {
+                return dayjs(val).format(DISPLAY_DATE_TIME);
+            }
+            return val;
+        }
+        if (Array.isArray(val)) return `${val.length} item(s)`;
+        if (typeof val === 'object') return '[object]';
+        return String(val);
+    };
 
     return (
         <Fade in={true}>
@@ -2358,8 +2391,8 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                                       { label: 'Total Visas', value: clientData.visas.length },
                                                       { label: 'Total Passports', value: clientData.passports.length },
                                                       { label: 'Total Policies', value: clientData.policies.length },
-                                                      { label: 'Total Spend', value: `$${analytics.totalSpend.toFixed(2)}` },
-                                                      { label: 'Avg Spend / Trip', value: `$${analytics.avgSpend.toFixed(2)}` },
+                                                      { label: 'Total Spend', value: formatCurrency(analytics.totalSpend) },
+                                                      { label: 'Avg Spend / Trip', value: formatCurrency(analytics.avgSpend) },
                                                       { label: 'Popular Destination', value: analytics.popularDestination },
                                                     ];
                                                     return details.map(d => (
@@ -2401,13 +2434,32 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                                             </Box>
                                             <Box display="flex" justifyContent="space-between" alignItems="center">
                                                 <Typography variant="body1">Total Spend:</Typography>
-                                                <Typography variant="h6" color="primary.main">${analytics.totalSpend.toFixed(2)}</Typography>
+                                                <Typography variant="h6" color="primary.main">{formatCurrency(analytics.totalSpend)}</Typography>
                                             </Box>
                                             <Box display="flex" justifyContent="space-between" alignItems="center">
                                                 <Typography variant="body1">Average Spend per Trip:</Typography>
-                                                <Typography variant="h6" color="primary.main">${analytics.avgSpend.toFixed(2)}</Typography>
+                                                <Typography variant="h6" color="primary.main">{formatCurrency(analytics.avgSpend)}</Typography>
                                             </Box>
                                         </Stack>
+                                        {/* Department summary clickable boxes */}
+                                        <Box sx={{ mt:3 }}>
+                                            <Typography variant="subtitle1" sx={{ fontWeight:'bold', mb:1 }}>Departments</Typography>
+                                            <Grid container spacing={1}>
+                                                {([
+                                                    { key:'Bookings', count: clientData.bookings.length, color:'primary.main' },
+                                                    { key:'Visas', count: clientData.visas.length, color:'warning.main' },
+                                                    { key:'Passports', count: clientData.passports.length, color:'info.main' },
+                                                    { key:'Policies', count: clientData.policies.length, color:'success.main' },
+                                                ] as { key: 'Bookings' | 'Visas' | 'Passports' | 'Policies'; count:number; color:string }[]).map(d => (
+                                                    <Grid item xs={6} sm={6} md={6} key={d.key}>
+                                                        <Paper role="button" aria-label={`View ${d.key} details`} tabIndex={0} onClick={()=> openDeptDialog(d.key)} onKeyDown={(e)=> { if(e.key==='Enter') openDeptDialog(d.key); }} elevation={1} sx={{ p:1.2, borderRadius:1, cursor:'pointer', '&:hover': { boxShadow: 3 } }}>
+                                                            <Typography variant="caption" color="text.secondary" sx={{ fontWeight:500 }}>{d.key}</Typography>
+                                                            <Typography variant="subtitle1" sx={{ fontWeight:700, color: d.color }}>{d.count}</Typography>
+                                                        </Paper>
+                                                    </Grid>
+                                                ))}
+                                            </Grid>
+                                        </Box>
                                         <Box sx={{mt: 3, height: 200}}>
                                             <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>Top Destinations</Typography>
                                             <ResponsiveContainer width="100%" height="90%">
@@ -2522,6 +2574,109 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                             onSave={handleUpdateNote}
                         />
                     )}
+                    {/* Department Detail Dialog */}
+                    <Dialog open={deptDialogOpen} onClose={closeDeptDialog} fullWidth maxWidth="md">
+                        <DialogTitle>{deptType ? `${deptType} Details` : 'Details'}</DialogTitle>
+                        <DialogContent dividers>
+                            {deptType && (()=> {
+                                const cfg = deptConfig[deptType];
+                                const rows = cfg.data as any[];
+                                const cols = cfg.columns as { key: string; label: string; render?: (val:any)=>React.ReactNode }[];
+                                if (!rows.length) return <Alert severity="info">No {deptType.toLowerCase()} found.</Alert>;
+                                return (
+                                    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 420 }}>
+                                        <Table size="small" stickyHeader>
+                                            <TableHead>
+                                                <TableRow>
+                                                    {cols.map(c => <TableCell key={c.key}>{c.label}</TableCell>)}
+                                                    <TableCell>Actions</TableCell>
+                                                </TableRow>
+                                            </TableHead>
+                                            <TableBody>
+                                                {rows.map(r => (
+                                                    <TableRow key={r.id} hover>
+                                                        {cols.map(c => <TableCell key={c.key}>{c.render ? c.render((r as any)[c.key]) : (r as any)[c.key] ?? '—'}</TableCell>)}
+                                                        <TableCell>
+                                                            <Stack direction="row" spacing={1}>
+                                                                <Tooltip title="View Details"><IconButton size="small" onClick={()=> openRecordDetail(r)}><InfoIcon fontSize="small" color="primary" /></IconButton></Tooltip>
+                                                                <Tooltip title="Edit"><IconButton size="small" onClick={()=> { onOpenModal('edit', r, cfg.view); closeDeptDialog(); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                                                                <Tooltip title="Delete"><IconButton size="small" onClick={()=> { onDeleteItem(r.id, cfg.view); }}><DeleteIcon fontSize="small" color="error" /></IconButton></Tooltip>
+                                                            </Stack>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                    </TableContainer>
+                                );
+                            })()}
+                        </DialogContent>
+                        <DialogActions>
+                            <Button onClick={closeDeptDialog}>Close</Button>
+                        </DialogActions>
+                    </Dialog>
+                    {/* Record Detail Dialog */}
+                    <Dialog open={recordDetailOpen} onClose={closeRecordDetail} fullWidth maxWidth="md">
+                        <DialogTitle sx={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                            <Typography variant="h6" sx={{ fontWeight:600 }}>Entry Details</Typography>
+                            <Stack direction="row" spacing={1}>
+                                <Tooltip title="Copy JSON"><IconButton size="small" onClick={copyRecordJson}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
+                                <IconButton size="small" onClick={closeRecordDetail}><MuiCloseIcon fontSize="small" /></IconButton>
+                            </Stack>
+                        </DialogTitle>
+                        <DialogContent dividers sx={{ maxHeight: '70vh' }}>
+                            {recordDetail && (
+                                <Stack spacing={3}>
+                                    {/* Field Grid */}
+                                    <Box>
+                                        <Typography variant="subtitle1" sx={{ fontWeight:600, mb:1 }}>Fields</Typography>
+                                        <Grid container spacing={1}>
+                                            {Object.keys(recordDetail).filter(k => k !== 'segments').map(key => (
+                                                <Grid item xs={12} sm={6} md={4} key={key}>
+                                                    <Paper variant="outlined" sx={{ p:1, borderRadius:1 }}>
+                                                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight:500 }}>{key}</Typography>
+                                                        <Typography variant="body2" sx={{ fontWeight:600, wordBreak:'break-word' }}>{formatFieldValue(key, (recordDetail as any)[key])}</Typography>
+                                                    </Paper>
+                                                </Grid>
+                                            ))}
+                                        </Grid>
+                                    </Box>
+                                    {/* Travel Legs (Segments) */}
+                                    {Array.isArray(recordDetail.segments) && (
+                                        <Box>
+                                            <Typography variant="subtitle1" sx={{ fontWeight:600, mb:1 }}>Travel Legs ({recordDetail.segments.length})</Typography>
+                                            <TableContainer component={Paper} variant="outlined" sx={{ maxHeight:240 }}>
+                                                <Table size="small" stickyHeader>
+                                                    <TableHead>
+                                                        <TableRow>
+                                                            {recordDetail.segments.length>0 && Object.keys(recordDetail.segments[0]).map((k:string)=>(<TableCell key={k}>{k}</TableCell>))}
+                                                        </TableRow>
+                                                    </TableHead>
+                                                    <TableBody>
+                                                        {recordDetail.segments.map((seg:any, idx:number)=>(
+                                                            <TableRow key={idx} hover>
+                                                                {Object.keys(seg).map(k => <TableCell key={k}>{formatFieldValue(k, seg[k])}</TableCell>)}
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                            </TableContainer>
+                                        </Box>
+                                    )}
+                                    {/* Raw JSON */}
+                                    <Box>
+                                        <Typography variant="subtitle1" sx={{ fontWeight:600, mb:1 }}>Raw JSON</Typography>
+                                        <Paper variant="outlined" sx={{ p:1, maxHeight:300, overflow:'auto', fontFamily:'monospace', fontSize:'0.75rem' }}>
+                                            <pre style={{ margin:0 }}>{JSON.stringify(recordDetail, null, 2)}</pre>
+                                        </Paper>
+                                    </Box>
+                                </Stack>
+                            )}
+                        </DialogContent>
+                        <DialogActions>
+                            <Button onClick={closeRecordDetail}>Close</Button>
+                        </DialogActions>
+                    </Dialog>
                 </Box>
             )}
         </Box>

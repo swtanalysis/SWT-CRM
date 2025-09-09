@@ -14,6 +14,7 @@ import NextLink from 'next/link';
 import dayjs from 'dayjs';
 import { DISPLAY_DATE, DISPLAY_DATE_TIME } from '../../lib/dateFormats';
 
+import { formatCurrency } from '../../lib/currency';
 const ProfilePage: React.FC = () => {
   const [mounted, setMounted] = useState(false);
   useEffect(()=> { setMounted(true); },[]);
