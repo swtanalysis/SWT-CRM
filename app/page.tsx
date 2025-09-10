@@ -1053,14 +1053,16 @@ export default function DashboardPage() {
                 const bookings = userDailyMetrics.reduce((s,m)=>s+m.bookings_count,0);
                 const revenue = userDailyMetrics.reduce((s,m)=>s+Number(m.revenue_sum||0),0);
                 const policiesCount = userDailyMetrics.reduce((s,m)=>s+m.policies_count,0);
-                return { bookings, revenue, policies: policiesCount };
+                // We don't have per-user policy revenue separate yet; set 0 for now.
+                return { bookings, revenue, policies: policiesCount, policyRevenue: 0 };
             }
             // Fallback derive from activity (counts of create actions)
             const byEntity = (entity:string) => userActivity.filter(a=>a.action==='create' && a.entity_type===entity).length;
             return {
                 bookings: byEntity('bookings'),
-                revenue: 0, // cannot infer without amount snapshot
-                policies: byEntity('policies')
+                revenue: 0,
+                policies: byEntity('policies'),
+                policyRevenue: 0
             };
         }, [userDailyMetrics, userActivity]);
 
@@ -1075,11 +1077,11 @@ export default function DashboardPage() {
                 policies: policyData.length,
                 visas: visaData.length,
                 passports: passportData.length,
-                clients: clientData.length
+                clients: clientData.length,
             };
         }, [bookingData, policyData, visaData, passportData, clientData]);
 
-        const activeKpis = isUser ? userKpis : globalKpis;
+    const activeKpis = isUser ? userKpis : globalKpis as unknown as typeof userKpis;
         return (
         <Fade in={true}>
         <Grid container spacing={3}>
@@ -1095,41 +1097,38 @@ export default function DashboardPage() {
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
                         <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
-                                                        <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'My Revenue (30d)':'Active Bookings'}</Typography>
-                                                        <Typography variant="h4" color="secondary.main" sx={{fontWeight: 'bold'}}>{isUser ? (activeKpis.revenue||0).toFixed(0) : stats.bookings}</Typography>
-                        </Paper>
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
                                                         <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'My Policies (30d)':'Avg. Trip Duration'}</Typography>
                                                         <Typography variant="h4" color="info.main" sx={{fontWeight: 'bold'}}>{isUser ? activeKpis.policies : `${avgTripDuration} Days`}</Typography>
                         </Paper>
                     </Grid>
                     <Grid item xs={12} sm={6} md={3}>
                         <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius: 2, height: '100%'}}>
-                                                        <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'Mode':'Expiring Soon'}</Typography>
-                                                        <Typography variant="h4" color="error.main" sx={{fontWeight: 'bold'}}>{isUser? 'Me':'All'}</Typography>
+                                                        <Typography variant="h6" color="text.secondary" gutterBottom>{isUser? 'My Revenue (30d)':'Bookings'}</Typography>
+                                                        <Typography variant="h4" color="secondary.main" sx={{fontWeight: 'bold'}}>{isUser ? (activeKpis.revenue||0).toFixed(0) : stats.bookings}</Typography>
                         </Paper>
                     </Grid>
+                    
                     {/* Added department KPIs */}
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
-                            <Typography variant="h6" color="text.secondary" gutterBottom>Policies</Typography>
-                            <Typography variant="h4" color="warning.main" sx={{fontWeight:'bold'}}>{policyData.length}</Typography>
-                        </Paper>
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
-                            <Typography variant="h6" color="text.secondary" gutterBottom>Visas</Typography>
-                            <Typography variant="h4" color="success.main" sx={{fontWeight:'bold'}}>{visaData.length}</Typography>
-                        </Paper>
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
-                            <Typography variant="h6" color="text.secondary" gutterBottom>Passports</Typography>
-                            <Typography variant="h4" color="info.main" sx={{fontWeight:'bold'}}>{passportData.length}</Typography>
-                        </Paper>
-                    </Grid>
+                                        {/* Department/Product KPIs with per-user variants */}
+                                        
+                                        <Grid item xs={12} sm={6} md={3}>
+                                            <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
+                                                <Typography variant="h6" color="text.secondary" gutterBottom>{isUser ? 'My Visas (30d)' : 'Visas'}</Typography>
+                                                <Typography variant="h4" color="success.main" sx={{fontWeight:'bold'}}>{isUser ? scopedVisas.length : visaData.length}</Typography>
+                                            </Paper>
+                                        </Grid>
+                                        <Grid item xs={12} sm={6} md={3}>
+                                            <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
+                                                <Typography variant="h6" color="text.secondary" gutterBottom>{isUser ? 'My Passports (30d)' : 'Passports'}</Typography>
+                                                <Typography variant="h4" color="info.main" sx={{fontWeight:'bold'}}>{isUser ? scopedPassports.length : passportData.length}</Typography>
+                                            </Paper>
+                                        </Grid>
+                                        <Grid item xs={12} sm={6} md={3}>
+                                            <Paper elevation={3} sx={{p:3, textAlign:'center', borderRadius:2, height:'100%'}}>
+                                            <Typography variant="h6" color="text.secondary" gutterBottom>{isUser ? 'My Clients (30d)' : 'Policies'}</Typography>
+                                            <Typography variant="h4" color="primary.dark" sx={{fontWeight:'bold'}}>{isUser ? scopedClients.length : policyData.length}</Typography>
+                                            </Paper>
+                                        </Grid>
                                         {isUser && (
                                             <Grid item xs={12}>
                                                 <Typography variant="caption" color="text.secondary">Showing metrics for your activity over last 30 days. Switch back to "All Data" to view organization-wide KPIs.</Typography>
