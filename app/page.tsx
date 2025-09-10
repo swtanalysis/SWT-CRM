@@ -1286,9 +1286,7 @@ export default function DashboardPage() {
     const [airportOptions, setAirportOptions] = useState<Array<{ code: string; name: string; city?: string; country?: string; type: string }>>([]);
     const airportAbortRef = useRef<AbortController | null>(null);
     const [initialized, setInitialized] = useState(false);
-    const storageKey = useMemo(() => `form_${activeView}`, [activeView]);
-    const initialSnapshotRef = useRef<any>(null);
-    const [isDirty, setIsDirty] = useState(false);
+    // Draft persistence removed: no storageKey / dirty tracking
         // Debug mount/unmount to diagnose unexpected remounts (Policies form issue)
         useEffect(()=> {
             console.debug('[FormModal] mount', { activeView, modalMode });
@@ -1299,76 +1297,19 @@ export default function DashboardPage() {
       if (!openModal) return;
       if (modalMode === 'edit' && selectedItem) {
         // deep clone to prevent mutating original reference
-        setFormData(JSON.parse(JSON.stringify(selectedItem)));
-    initialSnapshotRef.current = JSON.parse(JSON.stringify(selectedItem));
+    setFormData(JSON.parse(JSON.stringify(selectedItem)));
         setInitialized(true);
         return;
       }
-      try {
-                // For add mode, attempt to restore localStorage draft first (more persistent across reloads than sessionStorage)
-                if (modalMode === 'add') {
-                    const draftKey = `draft_${(activeView==='Client Insight' ? 'Clients' : activeView).toLowerCase()}_${modalMode}`;
-                    const draftRaw = localStorage.getItem(draftKey);
-                    if (draftRaw) {
-                        try {
-                            const draftParsed = JSON.parse(draftRaw);
-                            if (draftParsed && typeof draftParsed === 'object' && Object.keys(draftParsed).length > 0) {
-                                console.debug('[FormModal] Initialized from localStorage draft', { draftKey, keys: Object.keys(draftParsed) });
-                                setFormData(draftParsed);
-                                initialSnapshotRef.current = JSON.parse(JSON.stringify(draftParsed));
-                                setInitialized(true);
-                                return;
-                            }
-                        } catch {}
-                    }
-                }
-                // Fallback: sessionStorage (survives soft navigations within tab)
-                const cached = sessionStorage.getItem(storageKey);
-                if (cached) {
-                    const parsed = JSON.parse(cached);
-                    if (parsed && Object.keys(parsed).length > 0) {
-                        console.debug('[FormModal] Initialized from sessionStorage cache', { storageKey, keys: Object.keys(parsed) });
-                        setFormData(parsed);
-                        initialSnapshotRef.current = JSON.parse(JSON.stringify(parsed));
-                        setInitialized(true);
-                        return;
-                    }
-                }
-      } catch {}
+            // Draft restore disabled
       const defaults = activeView === 'Client Insight' ? getFieldsForView('Clients') : getFieldsForView(activeView);
     setFormData(defaults);
-    initialSnapshotRef.current = JSON.parse(JSON.stringify(defaults));
       setInitialized(true);
-    }, [openModal, modalMode, selectedItem, activeView, storageKey]);
+        }, [openModal, modalMode, selectedItem, activeView]);
 
-        useEffect(() => {
-      if (!openModal || !initialized) return;
-      try { sessionStorage.setItem(storageKey, JSON.stringify(formData)); } catch {}
-                // Dirty tracking
-                try {
-                    if (initialSnapshotRef.current) {
-                        const snap = initialSnapshotRef.current;
-                        // Shallow compare keys relevant for Policies or current view
-                        const keys = Object.keys(formData || {});
-                        const changed = keys.some(k => JSON.stringify((formData as any)[k]) !== JSON.stringify(snap[k]));
-                        setIsDirty(changed);
-                    }
-                } catch {}
-    }, [formData, openModal, storageKey, initialized]);
+    // Draft persistence & dirty tracking removed
 
-            // Warn before unload if dirty
-            useEffect(()=> {
-                const handler = (e: BeforeUnloadEvent) => {
-                    if (openModal && isDirty) {
-                        e.preventDefault();
-                        e.returnValue = '';
-                        return '';
-                    }
-                    return undefined;
-                };
-                window.addEventListener('beforeunload', handler);
-                return () => window.removeEventListener('beforeunload', handler);
-            }, [isDirty, openModal]);
+            // Beforeunload warning removed
 
         // Debounced airport search
         useEffect(() => {
@@ -1394,51 +1335,7 @@ export default function DashboardPage() {
     const formKeys = useMemo(() => Object.keys(formData).filter(k => !['id','created_at'].includes(k)), [formData]);
 
     // --- Generic Form Draft Persistence ---
-    const genericDraftKey = useMemo(()=> `draft_${(activeView==='Client Insight' ? 'Clients' : activeView).toLowerCase()}_${modalMode}`, [activeView, modalMode]);
-    // Load draft when opening Add modal (avoid overwriting edit existing record)
-    useEffect(()=> {
-        if (openModal && modalMode==='add') {
-            try {
-                const raw = localStorage.getItem(genericDraftKey);
-                if (raw) {
-                    const d = JSON.parse(raw);
-                    if (d && typeof d === 'object') {
-                                                console.debug('[FormModal] Restoring draft', { genericDraftKey, keys: Object.keys(d) });
-                        setFormData((prev:any)=> ({ ...prev, ...d }));
-                    }
-                }
-            } catch {}
-        }
-    }, [openModal, modalMode, genericDraftKey]);
-    useEffect(()=> {
-        if (openModal && modalMode==='add') {
-            try {
-                const raw = localStorage.getItem(genericDraftKey);
-                if (raw) {
-                    const d = JSON.parse(raw);
-                    if (d && typeof d === 'object') {
-                        console.debug('[FormModal] Restoring draft', { genericDraftKey, keys: Object.keys(d) });
-                        setFormData((prev:any)=> ({ ...prev, ...d }));
-                    }
-                }
-            } catch {}
-        }
-    }, [openModal, modalMode, genericDraftKey]);
-    // Persist draft (debounced) while typing
-    useEffect(()=> {
-        if (!openModal || modalMode!=='add') return;
-        const id = setTimeout(()=> {
-            try { localStorage.setItem(genericDraftKey, JSON.stringify(formData)); } catch {}
-        }, 500);
-        return ()=> clearTimeout(id);
-    }, [formData, openModal, modalMode, genericDraftKey]);
-        // Flush latest form state on unmount to avoid losing recent keystrokes if a reload happens mid-typing
-        useEffect(()=> {
-            return () => {
-                try { sessionStorage.setItem(storageKey, JSON.stringify(formData)); } catch {}
-                try { if (modalMode==='add') localStorage.setItem(genericDraftKey, JSON.stringify(formData)); } catch {}
-            };
-        }, [formData, storageKey, modalMode, genericDraftKey]);
+    // Draft key logic removed
     // Clear draft on successful submit handled inside handleSubmit
 
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -1452,8 +1349,7 @@ export default function DashboardPage() {
 
         const handleSubmit = (e: React.FormEvent) => {
             e.preventDefault();
-            try { sessionStorage.removeItem(storageKey); } catch {}
-            try { if (modalMode==='add') localStorage.removeItem(genericDraftKey); } catch {}
+            // Removed draft cleanup
       const viewForDefs = activeView === 'Client Insight' ? 'Clients' : activeView;
             const defs: any = getFieldsForView(viewForDefs);
             const payload: any = {};
