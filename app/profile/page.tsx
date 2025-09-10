@@ -30,6 +30,9 @@ const ProfilePage: React.FC = () => {
   const [policies30, setPolicies30] = useState<any[]>([]);
   const [itineraries30, setItineraries30] = useState<any[]>([]);
   const [activity, setActivity] = useState<UserActivity[]>([]);
+  // Attribution activity (create events) for reconstructing user ownership when user_id missing in legacy rows
+  const [attribActivity, setAttribActivity] = useState<UserActivity[]>([]);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [activityLoading, setActivityLoading] = useState(false);
   // Removed API keys feature as requested
   const [snackbar, setSnackbar] = useState<{open:boolean; message:string; severity?:'success'|'error'|'info'|'warning'}>({open:false, message:''});
@@ -112,21 +115,53 @@ const ProfilePage: React.FC = () => {
       const since = dayjs().subtract(30,'day').format('YYYY-MM-DD'); // keep storage/query format
       const { data: met } = await supabase.from('user_metrics_daily').select('*').eq('user_id', authUser.id).gte('date', since).order('date');
       if (met) setMetrics(met as any);
-      // Fetch department data (created_at limited) for holistic analytics (system-wide)
+
+      // Safer fetchEntity: start with broad select('*') to avoid column errors, then derive needed fields.
+      const fetchEntity = async (table: string, _cols: string) => {
+        const attempts: any[] = [];
+        const log = (stage:string, res:any) => attempts.push({ table, stage, ok: !res.error, error: res.error ? { message: res.error.message } : null });
+        try {
+          // Broad fetch first (limit for safety)
+            let res = await supabase.from(table).select('*').limit(1000);
+            log('star', res);
+            if (res.error) {
+              // final fallback returns
+              setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), ...attempts] }));
+              return res;
+            }
+            // If success and we don't need to refetch narrower (we can just map later)
+            if (attempts.some(a=>a.error)) {
+              setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), ...attempts] }));
+            }
+            return res;
+        } catch (e:any) {
+          log('exception', { error: e });
+          setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), ...attempts] }));
+          return { data: [], error: e };
+        }
+      };
+
       const [cl, bk, vs, pp, pl, it] = await Promise.all([
-        supabase.from('clients').select('id, created_at').gte('created_at', since),
-        supabase.from('bookings').select('id, created_at, amount').gte('created_at', since),
-        supabase.from('visas').select('id, created_at, amount').gte('created_at', since),
-        supabase.from('passports').select('id, created_at, amount').gte('created_at', since),
-        supabase.from('policies').select('id, created_at, premium_amount').gte('created_at', since),
-        supabase.from('itineraries').select('id, created_at').gte('created_at', since)
+        fetchEntity('clients', 'id, created_at, user_id'),
+        fetchEntity('bookings', 'id, created_at, amount, user_id'),
+        fetchEntity('visas', 'id, created_at, amount, user_id'),
+        fetchEntity('passports', 'id, created_at, amount, user_id'),
+        fetchEntity('policies', 'id, created_at, premium_amount, user_id'),
+        fetchEntity('itineraries', 'id, created_at, user_id')
       ]);
-      if (cl.data) setClients30(cl.data);
-      if (bk.data) setBookings30(bk.data);
-      if (vs.data) setVisas30(vs.data);
-      if (pp.data) setPassports30(pp.data);
-      if (pl.data) setPolicies30(pl.data);
-      if (it.data) setItineraries30(it.data);
+      const cutoff = dayjs().subtract(30,'day');
+      const within30 = (rows:any[]) => rows.filter(r => r.created_at ? dayjs(r.created_at).isAfter(cutoff) : true);
+      if (cl.data) setClients30(within30(cl.data as any[]));
+      if (bk.data) setBookings30(within30(bk.data as any[]));
+      if (vs.data) setVisas30(within30(vs.data as any[]));
+      if (pp.data) setPassports30(within30(pp.data as any[]));
+      if (pl.data) setPolicies30(within30(pl.data as any[]));
+      if (it.data) setItineraries30(within30(it.data as any[]));
+
+  // Fetch recent activity for attribution (only create events for this user in last 60 days)
+  const sinceAct = dayjs().subtract(60,'day').toISOString();
+  const { data: acts } = await supabase.from('user_activity').select('id,user_id,action,entity_type,entity_id,created_at').eq('user_id', authUser.id).gte('created_at', sinceAct).in('action',['create','bootstrap']);
+  if (acts) setAttribActivity(acts as any[]);
   // API keys removed
     })();
   }, [authUser, ensureProfile]);
@@ -246,10 +281,10 @@ const ProfilePage: React.FC = () => {
 
   // Aggregate department daily counts (system-wide) for holistic KPIs
   const deptDaily = useMemo(()=> {
-    const index = (rows: any[], extra?: (r:any)=>number) => {
+  const index = (rows: any[], extra?: (r:any)=>number) => {
       const map: Record<string, { count: number; value: number }> = {};
       rows.forEach(r => {
-        const d = dayjs(r.created_at).format('YYYY-MM-DD');
+    const d = r.created_at ? dayjs(r.created_at).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
         if (!map[d]) map[d] = { count:0, value:0 };
         map[d].count++;
         if (extra) map[d].value += extra(r) || 0;
@@ -266,24 +301,87 @@ const ProfilePage: React.FC = () => {
     };
   }, [clients30, bookings30, visas30, passports30, policies30, itineraries30]);
 
+  // Build per-user filtered arrays (only if user_id available)
+  const userFiltered = useMemo(()=> {
+    if (!authUser?.id) return { bookings:[], policies:[], visas:[], passports:[], clients:[], itineraries:[] };
+    const f = (rows:any[]) => rows.filter(r=> r.user_id === authUser.id);
+    const base = {
+      bookings: f(bookings30),
+      policies: f(policies30),
+      visas: f(visas30),
+      passports: f(passports30),
+      clients: f(clients30),
+      itineraries: f(itineraries30)
+    };
+    // If all empty, attempt attribution via activity records (legacy rows lacking user_id)
+    const allEmpty = Object.values(base).every(arr => arr.length===0);
+    if (!allEmpty || !attribActivity.length) return base;
+    const createdIdsByType = attribActivity.reduce((map:any,a:any)=> {
+      if (!['create','bootstrap'].includes(a.action)) return map;
+      map[a.entity_type] = map[a.entity_type] || new Set();
+      if (a.entity_id) map[a.entity_type].add(a.entity_id);
+      return map;
+    },{});
+    const match = (rows:any[], type:string) => rows.filter(r => createdIdsByType[type]?.has(r.id));
+    return {
+      bookings: match(bookings30,'bookings'),
+      policies: match(policies30,'policies'),
+      visas: match(visas30,'visas'),
+      passports: match(passports30,'passports'),
+      clients: match(clients30,'clients'),
+      itineraries: match(itineraries30,'itineraries')
+    };
+  }, [authUser, bookings30, policies30, visas30, passports30, clients30, itineraries30, attribActivity]);
+
+  // User daily aggregates (fallback if metrics table sparse)
+  const userDaily = useMemo(()=> {
+    const index = (rows: any[], valueFn?: (r:any)=>number) => {
+      const map: Record<string, { count: number; value: number }> = {};
+      rows.forEach(r => {
+        const d = r.created_at ? dayjs(r.created_at).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
+        if (!map[d]) map[d] = { count:0, value:0 };
+        map[d].count++;
+        if (valueFn) map[d].value += valueFn(r) || 0;
+      });
+      return map;
+    };
+    return {
+      bookings: index(userFiltered.bookings, r=> Number(r.amount)||0),
+      policies: index(userFiltered.policies, r=> Number(r.premium_amount)||0),
+      visas: index(userFiltered.visas, r=> Number(r.amount)||0),
+      passports: index(userFiltered.passports, r=> Number(r.amount)||0)
+    };
+  }, [userFiltered]);
+
   // Build user & global sales trends; pick via scope
   const userSalesTrend = useMemo(()=> last30Days.map(d => {
     const m = metrics.find(x=>x.date===d);
-    const bookingRevenue = m? Number(m.revenue_sum||0):0;
+    const b = userDaily.bookings[d];
+    const pol = userDaily.policies[d];
+    const vis = userDaily.visas[d];
+    const pas = userDaily.passports[d];
+    // Prefer metrics for bookings if present, else fallback to raw
+    const bookings = m?.bookings_count ?? b?.count ?? 0;
+    const bookingRevenue = m ? Number(m.revenue_sum||0) : (b?.value||0);
+    const policyRevenue = pol?.value || 0;
+    const visaRevenue = vis?.value || 0;
+    const passportRevenue = pas?.value || 0;
+    const totalRevenue = bookingRevenue + policyRevenue + visaRevenue + passportRevenue;
+    const avg = bookings ? bookingRevenue / bookings : 0;
     return {
-      date: d.slice(5), // legacy short
+      date: d.slice(5),
       displayDate: dayjs(d).format('DD/MM'),
       isoDate: d,
-      bookings: m?.bookings_count||0,
+      bookings,
       bookingRevenue,
-      policyRevenue: 0,
-      visaRevenue: 0,
-      passportRevenue: 0,
-      totalRevenue: bookingRevenue,
-      revenue: bookingRevenue,
-      avg: m? Number(m.avg_booking_value||0):0
+      policyRevenue,
+      visaRevenue,
+      passportRevenue,
+      totalRevenue,
+      revenue: totalRevenue,
+      avg
     };
-  }), [metrics, last30Days]);
+  }), [metrics, last30Days, userDaily]);
   const globalSalesTrend = useMemo(()=> last30Days.map(d => {
     const b = deptDaily.bookings[d];
     const p = deptDaily.policies[d];
@@ -324,23 +422,31 @@ const ProfilePage: React.FC = () => {
   // Productivity metrics removed (tab deleted)
 
     const kpis = useMemo(()=> {
-      const bookings = salesTrend.reduce((s,r)=>s+r.bookings,0);
-      const bookingRevenue = salesTrend.reduce((s,r)=>s+(r.bookingRevenue||0),0);
-      const policyRevenueGlobal = Object.values(deptDaily.policies||{}).reduce((s:any,r:any)=>s+r.value,0);
-      const visaRevenueGlobal = Object.values(deptDaily.visas||{}).reduce((s:any,r:any)=>s+r.value,0);
-      const passportRevenueGlobal = Object.values(deptDaily.passports||{}).reduce((s:any,r:any)=>s+r.value,0);
-      const policyRevenue = (dataScope==='me') ? 0 : policyRevenueGlobal;
-      const visaRevenue = (dataScope==='me') ? 0 : visaRevenueGlobal;
-      const passportRevenue = (dataScope==='me') ? 0 : passportRevenueGlobal;
-      const policies = (dataScope==='me') ? metrics.reduce((s,m)=>s+m.policies_count,0) : (deptDaily.policies ? Object.values(deptDaily.policies).reduce((s,r)=>s+r.count,0):0);
-      const clients = (dataScope==='me') ? 0 : Object.values(deptDaily.clients||{}).reduce((s,r)=>s+r.count,0);
-      const visas = (dataScope==='me') ? 0 : Object.values(deptDaily.visas||{}).reduce((s,r)=>s+r.count,0);
-      const passports = (dataScope==='me') ? 0 : Object.values(deptDaily.passports||{}).reduce((s,r)=>s+r.count,0);
-      const itineraries = (dataScope==='me') ? 0 : Object.values(deptDaily.itineraries||{}).reduce((s,r)=>s+r.count,0);
-      const totalRevenue = bookingRevenue + policyRevenue + visaRevenue + passportRevenue;
+      const trendSource = (dataScope==='me') ? userSalesTrend : globalSalesTrend;
+      const bookings = trendSource.reduce((s,r)=>s+r.bookings,0);
+      const bookingRevenue = trendSource.reduce((s,r)=>s+(r.bookingRevenue||0),0);
+      const policyRevenue = trendSource.reduce((s,r)=>s+(r.policyRevenue||0),0);
+      const visaRevenue = trendSource.reduce((s,r)=>s+(r.visaRevenue||0),0);
+      const passportRevenue = trendSource.reduce((s,r)=>s+(r.passportRevenue||0),0);
+      const totalRevenue = trendSource.reduce((s,r)=>s+(r.totalRevenue||r.revenue||0),0);
+      // Counts
+      let policies = 0, visas = 0, passports = 0, clients = 0, itineraries = 0;
+      if (dataScope==='me') {
+        policies = userFiltered.policies.length;
+        visas = userFiltered.visas.length;
+        passports = userFiltered.passports.length;
+        clients = userFiltered.clients.length;
+        itineraries = userFiltered.itineraries.length;
+      } else {
+        policies = Object.values(deptDaily.policies||{}).reduce((s:any,r:any)=>s+r.count,0);
+        visas = Object.values(deptDaily.visas||{}).reduce((s:any,r:any)=>s+r.count,0);
+        passports = Object.values(deptDaily.passports||{}).reduce((s:any,r:any)=>s+r.count,0);
+        clients = Object.values(deptDaily.clients||{}).reduce((s:any,r:any)=>s+r.count,0);
+        itineraries = Object.values(deptDaily.itineraries||{}).reduce((s:any,r:any)=>s+r.count,0);
+      }
       const avg = bookings ? bookingRevenue / bookings : 0;
       return { bookings, bookingRevenue, policyRevenue, visaRevenue, passportRevenue, totalRevenue, policies, avg, clients, visas, passports, itineraries };
-    },[salesTrend, deptDaily, dataScope, metrics]);
+    },[dataScope, userSalesTrend, globalSalesTrend, deptDaily, userFiltered]);
 
   const departmentSummary = useMemo(()=> [
     { label:'Clients Added', value: kpis.clients, color:'primary.main' },
@@ -455,6 +561,7 @@ const ProfilePage: React.FC = () => {
             <ToggleButton value="all">All Data</ToggleButton>
             <ToggleButton value="me">My Data</ToggleButton>
           </ToggleButtonGroup>
+          <Button size="small" variant="outlined" color="inherit" onClick={()=>setShowDebugPanel(s=>!s)}>Debug</Button>
           {!edit && <Button color="inherit" startIcon={<EditIcon />} onClick={()=>setEdit(true)}>Edit</Button>}
           {edit && <Button color="inherit" startIcon={<SaveIcon />} onClick={handleSave}>Save</Button>}
         </Toolbar>
@@ -552,6 +659,15 @@ const ProfilePage: React.FC = () => {
                 <Typography variant="subtitle2" gutterBottom sx={{ fontWeight:600, mb:0 }}>Sales Trend (30d)</Typography>
                 <Typography variant="caption" color="text.secondary">Scope: {(dataScope==='me' && metrics.length)?'My Data':'All Data'}{(dataScope==='me' && !metrics.length)?' (fallback global)':''}</Typography>
               </Stack>
+              {showDebugPanel && (
+                <Paper variant="outlined" sx={{ p:1, mb:2, bgcolor:'#f8fffc', maxHeight:180, overflow:'auto' }}>
+                  <Typography variant="caption" sx={{ fontFamily:'monospace', display:'block' }}>authUser: {authUser?.id}</Typography>
+                  <Typography variant="caption" sx={{ fontFamily:'monospace', display:'block' }}>raw counts -&gt; bookings:{bookings30.length} policies:{policies30.length} visas:{visas30.length} passports:{passports30.length} clients:{clients30.length} itineraries:{itineraries30.length}</Typography>
+                  <Typography variant="caption" sx={{ fontFamily:'monospace', display:'block' }}>userFiltered -&gt; bookings:{userFiltered.bookings.length} policies:{userFiltered.policies.length} visas:{userFiltered.visas.length} passports:{userFiltered.passports.length} clients:{userFiltered.clients.length} itineraries:{userFiltered.itineraries.length}</Typography>
+                  <Typography variant="caption" sx={{ fontFamily:'monospace', display:'block' }}>attribActivity: {attribActivity.length}</Typography>
+                  {debugInfo?.entityFetch && <Typography variant="caption" sx={{ fontFamily:'monospace', display:'block' }}>entityFetch stages: {debugInfo.entityFetch.length}</Typography>}
+                </Paper>
+              )}
               <Box sx={{ height:240 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={salesTrend} margin={{ top: 5, right: 30, left: 0, bottom: 0 }}>
