@@ -1049,22 +1049,17 @@ export default function DashboardPage() {
     
         // Aggregate user-specific KPIs (30d)
         const userKpis = useMemo(() => {
-            if (userDailyMetrics && userDailyMetrics.length) {
-                const bookings = userDailyMetrics.reduce((s,m)=>s+m.bookings_count,0);
-                const revenue = userDailyMetrics.reduce((s,m)=>s+Number(m.revenue_sum||0),0);
-                const policiesCount = userDailyMetrics.reduce((s,m)=>s+m.policies_count,0);
-                // We don't have per-user policy revenue separate yet; set 0 for now.
-                return { bookings, revenue, policies: policiesCount, policyRevenue: 0 };
-            }
-            // Fallback derive from activity (counts of create actions)
-            const byEntity = (entity:string) => userActivity.filter(a=>a.action==='create' && a.entity_type===entity).length;
-            return {
-                bookings: byEntity('bookings'),
-                revenue: 0,
-                policies: byEntity('policies'),
-                policyRevenue: 0
-            };
-        }, [userDailyMetrics, userActivity]);
+            // Always derive from current scoped datasets so deletions are reflected.
+            const cutoff = dayjs().subtract(30,'day');
+            const inWindow = (rows:any[]) => rows.filter(r => r.created_at ? dayjs(r.created_at).isAfter(cutoff) : true);
+            const bookingsArr = inWindow(scopedBookings);
+            const policiesArr = inWindow(scopedPolicies);
+            const bookings = bookingsArr.length;
+            const policies = policiesArr.length;
+            const bookingRevenue = bookingsArr.reduce((s,b)=> s + (b.amount||0),0);
+            const policyRevenue = policiesArr.reduce((s,p)=> s + (p.premium_amount||0),0);
+            return { bookings, revenue: bookingRevenue + policyRevenue, policies, policyRevenue };
+        }, [scopedBookings, scopedPolicies]);
 
         const globalKpis = useMemo(()=> {
             const bookingRevenue = bookingData.reduce((s,b)=> s + (b.amount||0),0);
