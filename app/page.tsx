@@ -667,7 +667,7 @@ export default function DashboardPage() {
     case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', amount: 0, status: 'Confirmed', segments: [] };
     case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', amount: 0, notes: '' };
     case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: '', amount: 0};
-        case 'Policies': return { client_id: '', booking_id: '', policy_number: '', insurer: '', sum_insured: 0, start_date: '', end_date: '', premium_amount: 0 };
+        case 'Policies': return { client_id: '', policy_number: '', insurer: '', sum_insured: 0, start_date: '', end_date: '', premium_amount: 0 };
         default: return {};
     }
   };
@@ -1370,7 +1370,7 @@ export default function DashboardPage() {
       if (modalMode === 'add') handleAddItem(payload); else handleUpdateItem(payload);
     };
 
-    const clientsForSelect = useMemo(() => [...clients].sort((a,b)=>a.first_name.localeCompare(b.first_name)), [clients]);
+    const clientsForSelect = useMemo(() => [...clients].filter(Boolean).sort((a:any,b:any)=> (a.first_name||'').localeCompare(b.first_name||'')), [clients]);
     const bookingsForSelect = useMemo(() => formData.client_id ? bookings.filter(b => b.client_id === formData.client_id) : bookings, [bookings, formData.client_id]);
 
         return (
@@ -1501,19 +1501,11 @@ export default function DashboardPage() {
                                                     getOptionLabel={(c)=> [c.first_name,c.middle_name,c.last_name].filter(Boolean).join(' ')}
                                                     isOptionEqualToValue={(a,b)=> a.id===b.id}
                                                     value={clients.find(c=> c.id === formData.client_id) || null}
-                                                    onChange={(e,val)=> setFormData((p:any)=> ({ ...p, client_id: val? val.id : '', booking_id: '' }))}
+                                                                                                        onChange={(e,val)=> setFormData((p:any)=> ({ ...p, client_id: val? val.id : '' }))}
                                                     renderInput={(params)=><TextField {...params} label="Client" />}
                                                 />
                                             )}
-                      {key === 'booking_id' && (activeView === 'Policies' || activeView === 'Client Insight') && (
-                        <FormControl fullWidth size="small">
-                          <InputLabel>Booking</InputLabel>
-                          <Select name="booking_id" label="Booking" value={formData.booking_id || ''} onChange={(e)=> setFormData((p:any)=>({...p, booking_id: e.target.value}))}>
-                            <MenuItem value=""><em>None</em></MenuItem>
-                            {bookingsForSelect.map(b => <MenuItem key={b.id} value={b.id}>{b.pnr || b.reference || 'Booking'}</MenuItem>)}
-                          </Select>
-                        </FormControl>
-                      )}
+                                            {/* Booking field removed from Policy form */}
                       {(key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && !key.endsWith('_id') && (
                         <DatePicker format={DISPLAY_DATE} label={label} value={formData[key] ? dayjs(formData[key]) : null} onChange={(d)=>handleDateChange(key,d)} slotProps={{ textField: { fullWidth:true, size:'small' } }} />
                       )}
