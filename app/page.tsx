@@ -255,6 +255,21 @@ export default function DashboardPage() {
     const [userReminders, setUserReminders] = useState<UserReminder[]>([]);
     const [reminderModalOpen, setReminderModalOpen] = useState(false);
     const [editingReminder, setEditingReminder] = useState<UserReminder | null>(null);
+    // Ephemeral buffer for UserReminderModal to survive Fast Refresh while open
+    const reminderBufferRef = useRef<{ mode: 'add'|'edit'; id?: string|null; data: { title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } } | null>(null);
+    const latestReminderRef = useRef<{ title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number }>({});
+    useEffect(()=>{
+        if (reminderModalOpen) {
+            reminderBufferRef.current = {
+                mode: editingReminder ? 'edit' : 'add',
+                id: editingReminder?.id ?? null,
+                data: latestReminderRef.current || {}
+            };
+        } else {
+            reminderBufferRef.current = null;
+            latestReminderRef.current = {};
+        }
+    }, [reminderModalOpen, editingReminder]);
     // Duplicate client pre-insert handling
     const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
     const [pendingClientCreate, setPendingClientCreate] = useState<{ payload: any; matches: Client[] } | null>(null);
@@ -602,42 +617,16 @@ export default function DashboardPage() {
     // Potentially reset activeView if it was overridden for the modal, or keep it as is
     // For now, keep it as is, as the user might want to remain in Client Insight.
   };
-    // Persist minimal modal state so we can auto-reopen after a full page reload (e.g. dev Fast Refresh)
+    // Ephemeral in-memory persistence to prevent data loss on Fast Refresh while modal is open
+    const modalBufferRef = useRef<{ view: string; mode: 'add'|'edit'; data: any } | null>(null);
+    const latestFormDataRef = useRef<any>({});
     useEffect(()=> {
-        try {
-            if (openModal) {
-                localStorage.setItem('pending_modal_state', JSON.stringify({ view: activeView, mode: modalMode, ts: Date.now() }));
-            } else {
-                localStorage.removeItem('pending_modal_state');
-            }
-        } catch {}
+        if (openModal) {
+            modalBufferRef.current = { view: activeView, mode: modalMode, data: latestFormDataRef.current };
+        } else {
+            modalBufferRef.current = null;
+        }
     }, [openModal, activeView, modalMode]);
-    // On initial mount, if there was a pending modal state with a recent timestamp and a draft exists, auto-reopen
-    useEffect(()=> {
-        try {
-            const raw = localStorage.getItem('pending_modal_state');
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (parsed && parsed.view && parsed.mode && typeof parsed.ts === 'number') {
-                    // Only restore if within last 6 hours
-                    if (Date.now() - parsed.ts < 1000 * 60 * 60 * 6) {
-                        // Check that a draft exists for add mode, or if edit mode we still attempt restore
-                        const draftKey = `draft_${(parsed.view==='Client Insight' ? 'Clients' : parsed.view).toLowerCase()}_${parsed.mode}`;
-                        const hasDraft = !!localStorage.getItem(draftKey);
-                        if (parsed.mode === 'edit' || hasDraft) {
-                            setActiveView(parsed.view);
-                            setModalMode(parsed.mode);
-                            // Defer open to next tick so state setters apply first
-                            setTimeout(()=> setOpenModal(true), 0);
-                            console.debug('[Dashboard] Auto-reopening modal after reload', parsed);
-                        }
-                    } else {
-                        localStorage.removeItem('pending_modal_state');
-                    }
-                }
-            }
-        } catch {}
-    }, []);
   const handleOpenDocModal = (client: Client) => {
     setSelectedClientForDocs(client);
     setDocModalOpen(true);
@@ -1282,6 +1271,8 @@ export default function DashboardPage() {
   
   const FormModal = () => {
     const [formData, setFormData] = useState<any>({});
+        // Maintain a ref mirror so parent effect can snapshot
+        useEffect(()=> { latestFormDataRef.current = formData; }, [formData]);
     const [airportQuery, setAirportQuery] = useState('');
     const [airportOptions, setAirportOptions] = useState<Array<{ code: string; name: string; city?: string; country?: string; type: string }>>([]);
     const airportAbortRef = useRef<AbortController | null>(null);
@@ -1294,14 +1285,20 @@ export default function DashboardPage() {
         }, [activeView, modalMode]);
 
     useEffect(() => {
-      if (!openModal) return;
+            if (!openModal) return;
       if (modalMode === 'edit' && selectedItem) {
         // deep clone to prevent mutating original reference
     setFormData(JSON.parse(JSON.stringify(selectedItem)));
         setInitialized(true);
         return;
       }
-            // Draft restore disabled
+                        // Attempt to restore from in-memory buffer if it matches current view/mode
+                        if (modalBufferRef.current && modalBufferRef.current.view === activeView && modalBufferRef.current.mode === modalMode && modalBufferRef.current.data && Object.keys(modalBufferRef.current.data).length) {
+                                setFormData(JSON.parse(JSON.stringify(modalBufferRef.current.data)));
+                                setInitialized(true);
+                                return;
+                        }
+                        // Otherwise initialize with defaults
       const defaults = activeView === 'Client Insight' ? getFieldsForView('Clients') : getFieldsForView(activeView);
     setFormData(defaults);
       setInitialized(true);
@@ -1916,6 +1913,8 @@ export default function DashboardPage() {
                         onClose={()=> { setReminderModalOpen(false); setEditingReminder(null); }} 
                         existing={editingReminder} 
                         userId={session?.user.id || ''} 
+                        bufferRef={reminderBufferRef}
+                        latestRef={latestReminderRef}
                         onSaved={(r)=> { 
                             setReminderModalOpen(false); 
                             setEditingReminder(null); 
@@ -2213,6 +2212,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
 
     const [isNoteEditModalOpen, setIsNoteEditModalOpen] = useState(false);
     const [noteToEdit, setNoteToEdit] = useState<ClientNote | null>(null);
+    const latestEditedNoteRef = useRef<{ content?: string }>({});
 
     const handleOpenNoteEditModal = (note: ClientNote) => {
         setNoteToEdit(note);
@@ -2629,6 +2629,7 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
                             open={isNoteEditModalOpen}
                             onClose={handleCloseNoteEditModal}
                             note={noteToEdit}
+                            latestRef={latestEditedNoteRef}
                             onSave={handleUpdateNote}
                         />
                     )}
@@ -2748,14 +2749,25 @@ interface NoteEditModalProps {
     onClose: () => void;
     note: ClientNote;
     onSave: (noteId: string, updatedNoteContent: string) => void;
+    // Fast Refresh-safe buffering
+    latestRef?: React.MutableRefObject<{ content?: string } | undefined>;
 }
 
-const NoteEditModal: React.FC<NoteEditModalProps> = ({ open, onClose, note, onSave }) => {
+const NoteEditModal: React.FC<NoteEditModalProps> = ({ open, onClose, note, onSave, latestRef }) => {
     const [editedNoteContent, setEditedNoteContent] = useState(note.note);
 
+    // Mirror to latestRef so parent can snapshot if needed
+    useEffect(() => { if (latestRef) latestRef.current = { content: editedNoteContent }; }, [editedNoteContent, latestRef]);
+
     useEffect(() => {
-        setEditedNoteContent(note.note);
-    }, [note]);
+        // If latestRef has buffered content (e.g., after Fast Refresh), restore it; otherwise use note
+        if (open && latestRef?.current?.content) {
+            setEditedNoteContent(latestRef.current.content);
+        } else {
+            setEditedNoteContent(note.note);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [note, open]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -2861,7 +2873,7 @@ const UserRemindersView = ({ reminders, onCreate, onEdit, onStatusChange, onDele
 };
 
 // --- USER REMINDER CREATE / EDIT MODAL ---
-const UserReminderModal = ({ open, onClose, existing, userId, onSaved }: { open: boolean; onClose: () => void; existing: UserReminder | null; userId: string; onSaved: (r: UserReminder) => void }) => {
+const UserReminderModal = ({ open, onClose, existing, userId, onSaved, bufferRef, latestRef }: { open: boolean; onClose: () => void; existing: UserReminder | null; userId: string; onSaved: (r: UserReminder) => void; bufferRef?: React.MutableRefObject<{ mode: 'add'|'edit'; id?: string|null; data: { title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } } | null>; latestRef?: React.MutableRefObject<{ title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } | undefined> }) => {
     const isEdit = Boolean(existing);
     const [title, setTitle] = useState(existing?.title || '');
     const [details, setDetails] = useState(existing?.details || '');
@@ -2871,54 +2883,29 @@ const UserReminderModal = ({ open, onClose, existing, userId, onSaved }: { open:
     const [saving, setSaving] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [touched, setTouched] = useState(false);
-    // Draft persistence key (separate for create vs edit)
-    const draftKey = useMemo(()=> existing ? `reminder_draft_${existing.id}` : 'reminder_draft_new', [existing?.id, existing]);
-    // Load draft on mount/open
-    useEffect(()=> {
+    // Mirror latest to latestRef so parent can snapshot
+    useEffect(()=>{ if (open && latestRef) latestRef.current = { title, details, dueAt, remindAt, priority }; }, [open, title, details, dueAt, remindAt, priority, latestRef]);
+    // Restore from in-memory buffer on mount/open when creating new
+    useEffect(()=>{
         if (open) {
-            try {
-                const raw = localStorage.getItem(draftKey);
-                if (raw) {
-                    const d = JSON.parse(raw);
-                    if (!existing) {
-                        if (d.title) setTitle(d.title);
-                        if (d.details) setDetails(d.details);
-                        if (d.dueAt) setDueAt(d.dueAt);
-                        if (d.remindAt) setRemindAt(d.remindAt);
-                        if (typeof d.priority === 'number') setPriority(d.priority);
-                    }
-                }
-            } catch {}
+            if (!isEdit && bufferRef?.current?.mode === 'add' && bufferRef.current.data) {
+                const d = bufferRef.current.data;
+                if (d.title != null) setTitle(d.title);
+                if (d.details != null) setDetails(d.details);
+                if (typeof d.priority === 'number') setPriority(d.priority);
+                if (d.dueAt !== undefined) setDueAt(d.dueAt ?? null);
+                if (d.remindAt !== undefined) setRemindAt(d.remindAt ?? null);
+            } else if (isEdit && existing && bufferRef?.current?.mode === 'edit' && bufferRef.current.id === existing.id && bufferRef.current.data) {
+                const d = bufferRef.current.data;
+                if (d.title != null) setTitle(d.title);
+                if (d.details != null) setDetails(d.details);
+                if (typeof d.priority === 'number') setPriority(d.priority);
+                if (d.dueAt !== undefined) setDueAt(d.dueAt ?? null);
+                if (d.remindAt !== undefined) setRemindAt(d.remindAt ?? null);
+            }
         }
-    }, [open, draftKey, existing]);
-    useEffect(()=> {
-        if (open) {
-            try {
-                const raw = localStorage.getItem(draftKey);
-                if (raw) {
-                    const d = JSON.parse(raw);
-                    if (!existing) {
-                        if (d.title) setTitle(d.title);
-                        if (d.details) setDetails(d.details);
-                        if (d.dueAt) setDueAt(d.dueAt);
-                        if (d.remindAt) setRemindAt(d.remindAt);
-                        if (typeof d.priority === 'number') setPriority(d.priority);
-                    }
-                }
-            } catch {}
-        }
-    }, [open, draftKey, existing]);
-    // Persist draft (debounced)
-    useEffect(()=> {
-        if (!open) return; // only persist while modal open
-        const handle = setTimeout(()=> {
-            try {
-                const payload = { title, details, dueAt, remindAt, priority, ts: Date.now() };
-                localStorage.setItem(draftKey, JSON.stringify(payload));
-            } catch {}
-        }, 400);
-        return ()=> clearTimeout(handle);
-    }, [title, details, dueAt, remindAt, priority, draftKey, open]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
     useEffect(()=> {
         if (existing) {
             setTitle(existing.title);
@@ -2962,8 +2949,8 @@ const UserReminderModal = ({ open, onClose, existing, userId, onSaved }: { open:
                 if (error) { setErrorMsg(error.message); }
                 else if (data) onSaved(data as UserReminder);
             }
-            // Clear draft after successful save (only for new)
-            try { if (!isEdit) localStorage.removeItem(draftKey); } catch {}
+            // Clear latestRef after successful save
+            if (latestRef) latestRef.current = {};
         } catch (e:any) {
             setErrorMsg(e.message || 'Unexpected error');
         } finally {
