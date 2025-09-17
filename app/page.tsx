@@ -256,14 +256,15 @@ export default function DashboardPage() {
     const [reminderModalOpen, setReminderModalOpen] = useState(false);
     const [editingReminder, setEditingReminder] = useState<UserReminder | null>(null);
     // Ephemeral buffer for UserReminderModal to survive Fast Refresh while open
-    const reminderBufferRef = useRef<{ mode: 'add'|'edit'; id?: string|null; data: { title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } } | null>(null);
+    const reminderBufferRef = useRef<{ mode: 'add'|'edit'; id?: string|null; data: React.MutableRefObject<{ title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } | undefined> | { title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } } | null>(null);
     const latestReminderRef = useRef<{ title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number }>({});
     useEffect(()=>{
         if (reminderModalOpen) {
             reminderBufferRef.current = {
                 mode: editingReminder ? 'edit' : 'add',
                 id: editingReminder?.id ?? null,
-                data: latestReminderRef.current || {}
+                // Store the ref to always have latest values after a refresh
+                data: latestReminderRef
             };
         } else {
             reminderBufferRef.current = null;
@@ -610,19 +611,28 @@ export default function DashboardPage() {
         setActiveView(overrideView);
     }
     setOpenModal(true);
+        // Persist minimal open state so we can auto-reopen after Fast Refresh in dev
+        try {
+                if (typeof window !== 'undefined') {
+                        const viewToUse = overrideView || activeView;
+                        (window as any).__MODAL_STATE__ = { open: true, view: viewToUse, mode, selId: (item as any)?.id ?? null };
+                }
+        } catch {}
   };
   const handleCloseModal = () => {
     setOpenModal(false);
     setSelectedItem(null);
     // Potentially reset activeView if it was overridden for the modal, or keep it as is
     // For now, keep it as is, as the user might want to remain in Client Insight.
+        try { if (typeof window !== 'undefined') (window as any).__MODAL_STATE__ = { open: false }; } catch {}
   };
     // Ephemeral in-memory persistence to prevent data loss on Fast Refresh while modal is open
-    const modalBufferRef = useRef<{ view: string; mode: 'add'|'edit'; data: any } | null>(null);
+    const modalBufferRef = useRef<{ view: string; mode: 'add'|'edit'; data: React.MutableRefObject<any> | any } | null>(null);
     const latestFormDataRef = useRef<any>({});
     useEffect(()=> {
         if (openModal) {
-            modalBufferRef.current = { view: activeView, mode: modalMode, data: latestFormDataRef.current };
+            // Store the ref itself so we always read freshest form data after a refresh
+            modalBufferRef.current = { view: activeView, mode: modalMode, data: latestFormDataRef };
         } else {
             modalBufferRef.current = null;
         }
@@ -647,6 +657,35 @@ export default function DashboardPage() {
         }
     }
   };
+
+    // Auto-reopen the main FormModal after a Fast Refresh (dev only) using window-scoped modal state
+    const didAutoReopenRef = useRef(false);
+    useEffect(() => {
+        if (didAutoReopenRef.current) return;
+        if (typeof window === 'undefined') return;
+        const modalState = (window as any).__MODAL_STATE__;
+        if (!modalState || !modalState.open) return;
+        // Wait until initial data load completes for reliable item lookup
+        if (loading) return;
+        try {
+                const view: string = modalState.view;
+                const mode: 'add'|'edit' = modalState.mode;
+                const selId: string | null = modalState.selId ?? null;
+                let item: any = null;
+                if (mode === 'edit' && selId) {
+                        if (view === 'Clients') item = clients.find(c => (c as any).id === selId) || null;
+                        else if (view === 'Bookings') item = bookings.find(b => (b as any).id === selId) || null;
+                        else if (view === 'Visas') item = visas.find(v => (v as any).id === selId) || null;
+                        else if (view === 'Passports') item = passports.find(p => (p as any).id === selId) || null;
+                        else if (view === 'Policies') item = policies.find(p => (p as any).id === selId) || null;
+                }
+                setActiveView(view);
+                handleOpenModal(mode, item, view);
+                didAutoReopenRef.current = true;
+        } catch {
+                // ignore
+        }
+    }, [loading, clients, bookings, visas, passports, policies]);
 
 
   // --- UI CONFIGURATION & FILTERING ---
@@ -1273,6 +1312,14 @@ export default function DashboardPage() {
     const [formData, setFormData] = useState<any>({});
         // Maintain a ref mirror so parent effect can snapshot
         useEffect(()=> { latestFormDataRef.current = formData; }, [formData]);
+        // Also mirror into a window-scoped ephemeral buffer to survive full Fast Refresh remounts
+        useEffect(() => {
+            if (typeof window !== 'undefined' && openModal) {
+                try {
+                    (window as any).__FORM_BUFFER__ = { view: activeView, mode: modalMode, data: formData };
+                } catch {}
+            }
+        }, [formData, activeView, modalMode, openModal]);
     const [airportQuery, setAirportQuery] = useState('');
     const [airportOptions, setAirportOptions] = useState<Array<{ code: string; name: string; city?: string; country?: string; type: string }>>([]);
     const airportAbortRef = useRef<AbortController | null>(null);
@@ -1286,22 +1333,37 @@ export default function DashboardPage() {
 
     useEffect(() => {
             if (!openModal) return;
-      if (modalMode === 'edit' && selectedItem) {
-        // deep clone to prevent mutating original reference
-    setFormData(JSON.parse(JSON.stringify(selectedItem)));
-        setInitialized(true);
-        return;
-      }
-                        // Attempt to restore from in-memory buffer if it matches current view/mode
-                        if (modalBufferRef.current && modalBufferRef.current.view === activeView && modalBufferRef.current.mode === modalMode && modalBufferRef.current.data && Object.keys(modalBufferRef.current.data).length) {
-                                setFormData(JSON.parse(JSON.stringify(modalBufferRef.current.data)));
-                                setInitialized(true);
-                                return;
-                        }
-                        // Otherwise initialize with defaults
-      const defaults = activeView === 'Client Insight' ? getFieldsForView('Clients') : getFieldsForView(activeView);
-    setFormData(defaults);
-      setInitialized(true);
+            // 1) Try in-memory buffer first (covers add & edit)
+            if (modalBufferRef.current && modalBufferRef.current.view === activeView && modalBufferRef.current.mode === modalMode && modalBufferRef.current.data) {
+                const raw = modalBufferRef.current.data as any;
+                const snapshot = raw && typeof raw === 'object' && 'current' in raw ? raw.current : raw;
+                if (snapshot && Object.keys(snapshot).length) {
+                    setFormData(JSON.parse(JSON.stringify(snapshot)));
+                    setInitialized(true);
+                    return;
+                }
+            }
+            // 2) Fallback: window-scoped buffer (survives Fast Refresh in dev)
+            try {
+                if (typeof window !== 'undefined') {
+                    const wb = (window as any).__FORM_BUFFER__;
+                    if (wb && wb.view === activeView && wb.mode === modalMode && wb.data && Object.keys(wb.data).length) {
+                        setFormData(JSON.parse(JSON.stringify(wb.data)));
+                        setInitialized(true);
+                        return;
+                    }
+                }
+            } catch {}
+            // 3) If editing and we have a selected item, use it
+            if (modalMode === 'edit' && selectedItem) {
+                setFormData(JSON.parse(JSON.stringify(selectedItem)));
+                setInitialized(true);
+                return;
+            }
+            // 4) Otherwise initialize with defaults
+            const defaults = activeView === 'Client Insight' ? getFieldsForView('Clients') : getFieldsForView(activeView);
+            setFormData(defaults);
+            setInitialized(true);
         }, [openModal, modalMode, selectedItem, activeView]);
 
     // Draft persistence & dirty tracking removed
@@ -2873,7 +2935,7 @@ const UserRemindersView = ({ reminders, onCreate, onEdit, onStatusChange, onDele
 };
 
 // --- USER REMINDER CREATE / EDIT MODAL ---
-const UserReminderModal = ({ open, onClose, existing, userId, onSaved, bufferRef, latestRef }: { open: boolean; onClose: () => void; existing: UserReminder | null; userId: string; onSaved: (r: UserReminder) => void; bufferRef?: React.MutableRefObject<{ mode: 'add'|'edit'; id?: string|null; data: { title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } } | null>; latestRef?: React.MutableRefObject<{ title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } | undefined> }) => {
+const UserReminderModal = ({ open, onClose, existing, userId, onSaved, bufferRef, latestRef }: { open: boolean; onClose: () => void; existing: UserReminder | null; userId: string; onSaved: (r: UserReminder) => void; bufferRef?: React.MutableRefObject<{ mode: 'add'|'edit'; id?: string|null; data: React.MutableRefObject<{ title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } | undefined> | { title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } } | null>; latestRef?: React.MutableRefObject<{ title?: string; details?: string; dueAt?: string|null; remindAt?: string|null; priority?: number } | undefined> }) => {
     const isEdit = Boolean(existing);
     const [title, setTitle] = useState(existing?.title || '');
     const [details, setDetails] = useState(existing?.details || '');
@@ -2887,16 +2949,17 @@ const UserReminderModal = ({ open, onClose, existing, userId, onSaved, bufferRef
     useEffect(()=>{ if (open && latestRef) latestRef.current = { title, details, dueAt, remindAt, priority }; }, [open, title, details, dueAt, remindAt, priority, latestRef]);
     // Restore from in-memory buffer on mount/open when creating new
     useEffect(()=>{
-        if (open) {
-            if (!isEdit && bufferRef?.current?.mode === 'add' && bufferRef.current.data) {
-                const d = bufferRef.current.data;
+        if (open && bufferRef?.current?.data) {
+            const raw: any = bufferRef.current.data as any;
+            const d = raw && typeof raw === 'object' && 'current' in raw ? (raw.current || {}) : raw;
+            if (!d || typeof d !== 'object') return;
+            if (!isEdit && bufferRef.current.mode === 'add') {
                 if (d.title != null) setTitle(d.title);
                 if (d.details != null) setDetails(d.details);
                 if (typeof d.priority === 'number') setPriority(d.priority);
                 if (d.dueAt !== undefined) setDueAt(d.dueAt ?? null);
                 if (d.remindAt !== undefined) setRemindAt(d.remindAt ?? null);
-            } else if (isEdit && existing && bufferRef?.current?.mode === 'edit' && bufferRef.current.id === existing.id && bufferRef.current.data) {
-                const d = bufferRef.current.data;
+            } else if (isEdit && existing && bufferRef.current.mode === 'edit' && bufferRef.current.id === existing.id) {
                 if (d.title != null) setTitle(d.title);
                 if (d.details != null) setDetails(d.details);
                 if (typeof d.priority === 'number') setPriority(d.priority);
