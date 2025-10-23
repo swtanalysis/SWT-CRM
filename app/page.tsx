@@ -319,6 +319,9 @@ export default function DashboardPage() {
             latestReminderRef.current = {};
         }
     }, [reminderModalOpen, editingReminder]);
+
+    // Ref to allow pausing automatic refreshes while a modal is open (prevents overwriting form inputs)
+    const pauseAutoRefreshRef = useRef(false);
     // Duplicate client pre-insert handling
     const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
     const [pendingClientCreate, setPendingClientCreate] = useState<{ payload: any; matches: Client[] } | null>(null);
@@ -447,7 +450,8 @@ export default function DashboardPage() {
         let timer: any;
         const load = async () => {
             const { data } = await supabase.from('user_reminders').select('*').eq('user_id', session.user.id).order('due_at', { ascending: true });
-            if (data) setUserReminders(data as UserReminder[]);
+            // If auto-refresh is paused (modal open), don't apply results that may overwrite form inputs
+            if (data && !pauseAutoRefreshRef.current) setUserReminders(data as UserReminder[]);
         };
         load();
         timer = setInterval(load, 60000);
@@ -593,9 +597,10 @@ export default function DashboardPage() {
     const { data, error } = await performInsert(tableName, itemData);
     if (error) setError(`Error adding item: ${error.message || String(error)}`);
     else {
-        const inserted = Array.isArray(data) ? data[0] : null;
-        logActivity('create', tableName, inserted?.id, { values: itemData });
-        fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`});
+                const inserted = Array.isArray(data) ? data[0] : null;
+                logActivity('create', tableName, inserted?.id, { values: itemData });
+                // Refresh data and show success, but keep the modal open so user can continue editing or add related items
+                fetchData(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`});
     }
   };
 
@@ -632,7 +637,8 @@ export default function DashboardPage() {
             if (error) setError(`Error updating item: ${error.message}`);
             else { 
                 logActivity('update', tableName, id, { changes: updateData });
-                fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${tableName.slice(0, -1)} updated successfully!`}); 
+                // Keep modal open after update so the user doesn't lose context
+                fetchData(); setSnackbar({open: true, message: `${tableName.slice(0, -1)} updated successfully!`}); 
             }
     }
   };
@@ -665,6 +671,8 @@ export default function DashboardPage() {
         setActiveView(overrideView);
     }
     setOpenModal(true);
+        // pause automatic refreshes while a modal is open
+        pauseAutoRefreshRef.current = true;
         // Persist minimal open state so we can auto-reopen after Fast Refresh in dev
         try {
                 if (typeof window !== 'undefined') {
@@ -679,6 +687,8 @@ export default function DashboardPage() {
     // Potentially reset activeView if it was overridden for the modal, or keep it as is
     // For now, keep it as is, as the user might want to remain in Client Insight.
         try { if (typeof window !== 'undefined') (window as any).__MODAL_STATE__ = { open: false }; } catch {}
+            // resume automatic refreshes when modal closed
+            pauseAutoRefreshRef.current = false;
   };
     // Ephemeral in-memory persistence to prevent data loss on Fast Refresh while modal is open
     const modalBufferRef = useRef<{ view: string; mode: 'add'|'edit'; data: React.MutableRefObject<any> | any } | null>(null);
@@ -1364,6 +1374,22 @@ export default function DashboardPage() {
   
   const FormModal = () => {
     const [formData, setFormData] = useState<any>({});
+        // Synchronous update helper: update latestRef, window buffer, and state together
+        const updateFormDataSync = (updater: any) => {
+            try {
+                const prev = latestFormDataRef.current || formData || {};
+                const next = typeof updater === 'function' ? updater(prev) : updater;
+                // Keep the latestRef in sync immediately
+                latestFormDataRef.current = next;
+                // Mirror into window buffer for Fast Refresh survival
+                if (typeof window !== 'undefined' && openModal) {
+                    try { (window as any).__FORM_BUFFER__ = { view: activeView, mode: modalMode, data: next }; } catch {}
+                }
+                setFormData(next);
+            } catch (e) {
+                setFormData((p:any) => typeof updater === 'function' ? updater(p) : updater);
+            }
+        };
         // Maintain a ref mirror so parent effect can snapshot
         useEffect(()=> { latestFormDataRef.current = formData; }, [formData]);
         // Also mirror into a window-scoped ephemeral buffer to survive full Fast Refresh remounts
@@ -1386,13 +1412,25 @@ export default function DashboardPage() {
         }, [activeView, modalMode]);
 
     useEffect(() => {
-            if (!openModal) return;
+            // Reset initialization when modal closes so next open will re-run init logic
+            if (!openModal) {
+                setInitialized(false);
+                return;
+            }
+
+            // If we've already initialized this open session, don't re-initialize on selectedItem or other updates
+            if (initialized) return;
+
             // 1) Try in-memory buffer first (covers add & edit)
             if (modalBufferRef.current && modalBufferRef.current.view === activeView && modalBufferRef.current.mode === modalMode && modalBufferRef.current.data) {
                 const raw = modalBufferRef.current.data as any;
                 const snapshot = raw && typeof raw === 'object' && 'current' in raw ? raw.current : raw;
-                if (snapshot && Object.keys(snapshot).length) {
-                    setFormData(JSON.parse(JSON.stringify(snapshot)));
+                    if (snapshot && Object.keys(snapshot).length) {
+                    // Use sync updater to ensure refs and window buffer are in sync on init
+                    const copy = JSON.parse(JSON.stringify(snapshot));
+                    latestFormDataRef.current = copy;
+                    try { if (typeof window !== 'undefined') (window as any).__FORM_BUFFER__ = { view: activeView, mode: modalMode, data: copy }; } catch {}
+                    setFormData(copy);
                     setInitialized(true);
                     return;
                 }
@@ -1402,23 +1440,31 @@ export default function DashboardPage() {
                 if (typeof window !== 'undefined') {
                     const wb = (window as any).__FORM_BUFFER__;
                     if (wb && wb.view === activeView && wb.mode === modalMode && wb.data && Object.keys(wb.data).length) {
-                        setFormData(JSON.parse(JSON.stringify(wb.data)));
+                        const copy = JSON.parse(JSON.stringify(wb.data));
+                        latestFormDataRef.current = copy;
+                        try { if (typeof window !== 'undefined') (window as any).__FORM_BUFFER__ = { view: activeView, mode: modalMode, data: copy }; } catch {}
+                        setFormData(copy);
                         setInitialized(true);
                         return;
                     }
                 }
             } catch {}
-            // 3) If editing and we have a selected item, use it
+            // 3) If editing and we have a selected item, use it (only on initial open)
             if (modalMode === 'edit' && selectedItem) {
-                setFormData(JSON.parse(JSON.stringify(selectedItem)));
+                const copy = JSON.parse(JSON.stringify(selectedItem));
+                latestFormDataRef.current = copy;
+                try { if (typeof window !== 'undefined') (window as any).__FORM_BUFFER__ = { view: activeView, mode: modalMode, data: copy }; } catch {}
+                setFormData(copy);
                 setInitialized(true);
                 return;
             }
             // 4) Otherwise initialize with defaults
             const defaults = activeView === 'Client Insight' ? getFieldsForView('Clients') : getFieldsForView(activeView);
+            latestFormDataRef.current = defaults;
+            try { if (typeof window !== 'undefined') (window as any).__FORM_BUFFER__ = { view: activeView, mode: modalMode, data: defaults }; } catch {}
             setFormData(defaults);
             setInitialized(true);
-        }, [openModal, modalMode, selectedItem, activeView]);
+        }, [openModal, modalMode, selectedItem, activeView, initialized]);
 
     // Draft persistence & dirty tracking removed
 
@@ -1451,14 +1497,14 @@ export default function DashboardPage() {
     // Draft key logic removed
     // Clear draft on successful submit handled inside handleSubmit
 
-    const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      const { name, value, type, checked } = e.target as HTMLInputElement;
-      setFormData((prev: any) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
-    };
+        const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+            const { name, value, type, checked } = e.target as HTMLInputElement;
+            updateFormDataSync((p:any) => ({ ...p, [name]: type === 'checkbox' ? checked : value }));
+        };
 
-    const handleDateChange = (name: string, date: dayjs.Dayjs | null) => {
-      setFormData((prev: any) => ({ ...prev, [name]: date ? date.format('YYYY-MM-DD') : null }));
-    };
+        const handleDateChange = (name: string, date: dayjs.Dayjs | null) => {
+            updateFormDataSync((p:any) => ({ ...p, [name]: date ? date.format('YYYY-MM-DD') : null }));
+        };
 
         const handleSubmit = (e: React.FormEvent) => {
             e.preventDefault();
@@ -1509,9 +1555,11 @@ export default function DashboardPage() {
                                                                                         <Typography variant="body2" color="text.secondary">Add each leg of the journey (IATA codes suggested)</Typography>
                                                                                     </Box>
                                                                                     <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={() => {
-                                                                                        const next = Array.isArray(formData.segments) ? [...formData.segments] : [];
-                                                                                        next.push({ origin: '', destination: '', departure_date: '', airline: '' });
-                                                                                        setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                        updateFormDataSync((p:any)=>{
+                                                                                            const next = Array.isArray(p.segments) ? [...p.segments] : [];
+                                                                                            next.push({ origin: '', destination: '', departure_date: '', airline: '' });
+                                                                                            return { ...p, segments: next };
+                                                                                        });
                                                                                     }}>Add Segment</Button>
                                                                                 </Stack>
 
@@ -1537,9 +1585,11 @@ export default function DashboardPage() {
                                                                                                         <Chip size="small" label={`Segment ${idx + 1}`} />
                                                                                                         <Tooltip title="Delete Segment">
                                                                                                             <IconButton color="error" onClick={() => {
-                                                                                                                const next = [...(formData.segments || [])];
-                                                                                                                next.splice(idx, 1);
-                                                                                                                setFormData((p:any) => ({ ...p, segments: next }));
+                                                                                                                updateFormDataSync((p:any)=>{
+                                                                                                                    const next = Array.isArray(p.segments) ? [...p.segments] : [];
+                                                                                                                    next.splice(idx, 1);
+                                                                                                                    return { ...p, segments: next };
+                                                                                                                });
                                                                                                             }}>
                                                                                                                 <DeleteIcon />
                                                                                                             </IconButton>
@@ -1552,11 +1602,13 @@ export default function DashboardPage() {
                                                                                                                                                                                                 options={airportOptions.map(o => `${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}${o.country ? `, ${o.country}` : ''}`)}
                                                                                                                                                                                                 filterOptions={(x)=>x}
                                                                                                                                                                                                 value={seg.origin || ''}
-                                                                                                                                                                                                onChange={(e, val)=>{
-                                                                                                                                                                                                    const code = typeof val === 'string' ? val.trim().slice(0,3).toUpperCase() : '';
-                                                                                                                                                                                                    const next = [...(formData.segments||[])];
-                                                                                                                                                                                                    next[idx] = { ...next[idx], origin: code };
-                                                                                                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                                                                                                  onChange={(e, val)=>{
+                                                                                                                                                                                                      const code = typeof val === 'string' ? val.trim().slice(0,3).toUpperCase() : '';
+                                                                                                                                                                                                      updateFormDataSync((p:any)=>{
+                                                                                                                                                                                                          const next = Array.isArray(p.segments) ? [...p.segments] : [];
+                                                                                                                                                                                                          next[idx] = { ...next[idx], origin: code };
+                                                                                                                                                                                                          return { ...p, segments: next };
+                                                                                                                                                                                                      });
                                                                                                                                                                                                 }}
                                                                                                                                                                                                 onInputChange={(e, val)=> setAirportQuery(val)}
                                                                                                                                                                                                 renderInput={(params)=> <TextField {...params} label="Origin (IATA)" fullWidth placeholder="Type city or airport" />}
@@ -1568,11 +1620,13 @@ export default function DashboardPage() {
                                                                                                                                                                                                 options={airportOptions.map(o => `${o.code} — ${o.name}${o.city ? `, ${o.city}` : ''}${o.country ? `, ${o.country}` : ''}`)}
                                                                                                                                                                                                 filterOptions={(x)=>x}
                                                                                                                                                                                                 value={seg.destination || ''}
-                                                                                                                                                                                                onChange={(e, val)=>{
-                                                                                                                                                                                                    const code = typeof val === 'string' ? val.trim().slice(0,3).toUpperCase() : '';
-                                                                                                                                                                                                    const next = [...(formData.segments||[])];
-                                                                                                                                                                                                    next[idx] = { ...next[idx], destination: code };
-                                                                                                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                                                                                                  onChange={(e, val)=>{
+                                                                                                                                                                                                      const code = typeof val === 'string' ? val.trim().slice(0,3).toUpperCase() : '';
+                                                                                                                                                                                                      updateFormDataSync((p:any)=>{
+                                                                                                                                                                                                          const next = Array.isArray(p.segments) ? [...p.segments] : [];
+                                                                                                                                                                                                          next[idx] = { ...next[idx], destination: code };
+                                                                                                                                                                                                          return { ...p, segments: next };
+                                                                                                                                                                                                      });
                                                                                                                                                                                                 }}
                                                                                                                                                                                                 onInputChange={(e, val)=> setAirportQuery(val)}
                                                                                                                                                                                                 renderInput={(params)=> <TextField {...params} label="Destination (IATA)" fullWidth placeholder="Type city or airport" />}
@@ -1581,19 +1635,23 @@ export default function DashboardPage() {
                                                                                                         <Grid item xs={12} md={3}>
                                                                                                                <DatePicker format={DISPLAY_DATE} label="Departure Date" value={seg.departure_date ? dayjs(seg.departure_date) : null}
                                                                                                                 onChange={(d)=>{
-                                                                                                                    const next = [...(formData.segments||[])];
-                                                                                                                    next[idx] = { ...next[idx], departure_date: d ? d.format('YYYY-MM-DD') : '' };
-                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
-                                                                                                                }}
+                                                    updateFormDataSync((p:any)=>{
+                                                        const next = Array.isArray(p.segments) ? [...p.segments] : [];
+                                                        next[idx] = { ...next[idx], departure_date: d ? d.format('YYYY-MM-DD') : '' };
+                                                        return { ...p, segments: next };
+                                                    });
+                                                }}
                                                                                                                 slotProps={{ textField: { size:'small', fullWidth: true } }}
                                                                                                             />
                                                                                                         </Grid>
                                                                                                         <Grid item xs={12} md={3}>
                                                                                                             <TextField size="small" fullWidth label="Airline" value={seg.airline || ''}
                                                                                                                 onChange={(e)=>{
-                                                                                                                    const next = [...(formData.segments||[])];
-                                                                                                                    next[idx] = { ...next[idx], airline: e.target.value };
-                                                                                                                    setFormData((p:any)=>({ ...p, segments: next }));
+                                                                                                                    updateFormDataSync((p:any)=>{
+                                                                                                                        const next = Array.isArray(p.segments) ? [...p.segments] : [];
+                                                                                                                        next[idx] = { ...next[idx], airline: e.target.value };
+                                                                                                                        return { ...p, segments: next };
+                                                                                                                    });
                                                                                                                 }}
                                                                                                             />
                                                                                                         </Grid>
@@ -1614,7 +1672,7 @@ export default function DashboardPage() {
                                                     getOptionLabel={(c)=> [c.first_name,c.middle_name,c.last_name].filter(Boolean).join(' ')}
                                                     isOptionEqualToValue={(a,b)=> a.id===b.id}
                                                     value={clients.find(c=> c.id === formData.client_id) || null}
-                                                                                                        onChange={(e,val)=> setFormData((p:any)=> ({ ...p, client_id: val? val.id : '' }))}
+                                                                                                        onChange={(e,val)=> updateFormDataSync((p:any)=> ({ ...p, client_id: val? val.id : '' }))}
                                                     renderInput={(params)=><TextField {...params} label="Client" />}
                                                 />
                                             )}
@@ -1625,7 +1683,7 @@ export default function DashboardPage() {
                       {key === 'status' && (
                         <FormControl fullWidth size="small">
                           <InputLabel>Status</InputLabel>
-                          <Select name="status" label="Status" value={formData.status || ''} onChange={(e)=> setFormData((p:any)=>({...p, status: e.target.value}))}>
+                          <Select name="status" label="Status" value={formData.status || ''} onChange={(e)=> updateFormDataSync((p:any)=>({...p, status: e.target.value}))}>
                             <MenuItem value=""><em>None</em></MenuItem>
                             <MenuItem value="Confirmed">Confirmed</MenuItem>
                             <MenuItem value="Pending">Pending</MenuItem>
@@ -1673,7 +1731,8 @@ export default function DashboardPage() {
             else {
                 const inserted = Array.isArray(data) ? data[0] : null;
                 logActivity('create', tableName, inserted?.id, { values: payload, duplicate_override: true });
-                fetchData(); handleCloseModal(); setSnackbar({ open: true, message: 'Client added (duplicate override).' });
+                // Keep main modal open; only close the duplicate dialog
+                fetchData(); setSnackbar({ open: true, message: 'Client added (duplicate override).' });
             }
             setPendingClientCreate(null);
         };
@@ -1701,7 +1760,7 @@ export default function DashboardPage() {
                                         <TableCell>{m.mobile_no}</TableCell>
                                         <TableCell>{m.dob ? dayjs(m.dob).format(DISPLAY_DATE) : ''}</TableCell>
                                         <TableCell align="right">
-                                            <Button size="small" variant="outlined" onClick={()=>{ setShowDuplicateDialog(false); setPendingClientCreate(null); handleCloseModal(); setSnackbar({ open:true, message: 'Using existing client.'}); }}>
+                                            <Button size="small" variant="outlined" onClick={()=>{ setShowDuplicateDialog(false); setPendingClientCreate(null); setSnackbar({ open:true, message: 'Using existing client.'}); }}>
                                                 Use
                                             </Button>
                                         </TableCell>
