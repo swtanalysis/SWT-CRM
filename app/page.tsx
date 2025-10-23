@@ -62,6 +62,54 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'YOUR_SUPABASE_URL'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+// Helper to perform inserts while attaching user_id when available.
+// Placed at module scope so nested components inside this file can call it.
+// Robustness: some tables do not have a user_id column. The Supabase client will error
+// if we try to insert a column that doesn't exist (schema cache mismatch). We keep a
+// small in-memory cache of which tables support `user_id` and, on error, retry without it.
+const _tableUserIdSupport = new Map<string, boolean>();
+const performInsert = async (tableName: string, payload: any) => {
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const userId = session?.user?.id;
+        const supportsUserId = _tableUserIdSupport.get(tableName);
+
+        // Build the insert payload depending on whether we believe the table supports user_id
+        let toInsert: any = payload;
+        if (userId && supportsUserId !== false) {
+            toInsert = Array.isArray(payload)
+                ? payload.map(p => ({ ...(p || {}), user_id: userId }))
+                : { ...(payload || {}), user_id: userId };
+        }
+
+        const { data, error } = await supabase.from(tableName).insert(Array.isArray(toInsert) ? toInsert : [toInsert]).select();
+
+        // If we got an error complaining about missing user_id column, mark the table as not supporting it
+        if (error) {
+            const msg = String(error.message || error).toLowerCase();
+            if (msg.includes("could not find the 'user_id' column") || msg.includes('column "user_id" does not exist') || msg.includes('unknown column') || msg.includes('could not find column')) {
+                _tableUserIdSupport.set(tableName, false);
+
+                // Retry without user_id
+                const cleaned = Array.isArray(payload)
+                    ? payload.map(p => { const c = { ...(p || {}) }; delete (c as any).user_id; return c; })
+                    : ( () => { const c = { ...(payload || {}) } as any; delete c.user_id; return c; } )();
+                const { data: data2, error: error2 } = await supabase.from(tableName).insert(Array.isArray(cleaned) ? cleaned : [cleaned]).select();
+                return { data: data2, error: error2 };
+            }
+        }
+
+        // If insert succeeded and we previously didn't know, assume user_id is supported when we attached one
+        if (!error && userId && supportsUserId === undefined) {
+            _tableUserIdSupport.set(tableName, true);
+        }
+
+        return { data, error };
+    } catch (e:any) {
+        return { data: null, error: e };
+    }
+};
+
 // Lazy load heavy itinerary builder to reduce initial bundle
 const ItinerariesView = dynamic(() => import('../components/ItinerariesView'), { ssr: false });
 
@@ -293,6 +341,8 @@ export default function DashboardPage() {
             // console.debug('Activity log failed', e);
         }
     };
+
+    // NOTE: performInsert moved to module scope (top of file) to be accessible to nested components.
   // --- AUTHENTICATION ---
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -326,8 +376,10 @@ export default function DashboardPage() {
             // user daily metrics (pre-aggregated if available)
             const { data: udm } = await supabase.from('user_metrics_daily').select('*').eq('user_id', session.user.id).gte('date', since).order('date');
             if (udm) setUserDailyMetrics(udm as any);
-            // raw activity for fallback / extended metrics
-            const { data: acts } = await supabase.from('user_activity').select('*').eq('user_id', session.user.id).gte('created_at', since).order('created_at', { ascending:false }).limit(500);
+            // raw activity for fallback / extended metrics (paged)
+            const { fetchAllFromQuery } = await import('../lib/dbHelpers');
+            const baseQuery = supabase.from('user_activity').select('*').eq('user_id', session.user.id).gte('created_at', since).order('created_at', { ascending:false });
+            const { data: acts } = await fetchAllFromQuery(baseQuery, 1000);
             if (acts) setUserActivity(acts as any);
         };
         loadUserMetrics();
@@ -351,16 +403,17 @@ export default function DashboardPage() {
     setLoading(true)
     setError(null)
     try {
-      const [
-        clientsRes, bookingsRes, visasRes, passportsRes, policiesRes, notesRes
-      ] = await Promise.all([
-        supabase.from('clients').select('*'),
-        supabase.from('bookings').select('*'),
-        supabase.from('visas').select('*'),
-        supabase.from('passports').select('*'),
-        supabase.from('policies').select('*'),
-        supabase.from('client_notes').select('*'),
-      ]);
+            const { fetchAllFrom } = await import('../lib/dbHelpers');
+            const [
+                clientsRes, bookingsRes, visasRes, passportsRes, policiesRes, notesRes
+            ] = await Promise.all([
+                fetchAllFrom('clients', '*', 1000),
+                fetchAllFrom('bookings', '*', 1000),
+                fetchAllFrom('visas', '*', 1000),
+                fetchAllFrom('passports', '*', 1000),
+                fetchAllFrom('policies', '*', 1000),
+                fetchAllFrom('client_notes', '*', 1000),
+            ]);
 
       if (clientsRes.error) throw new Error(`Clients: ${clientsRes.error.message}`);
       if (bookingsRes.error) throw new Error(`Bookings: ${bookingsRes.error.message}`);
@@ -515,7 +568,8 @@ export default function DashboardPage() {
                 if (orClauses.length) {
                     query = query.or(orClauses.join(','));
                 }
-                const { data: dupData, error: dupErr } = await query.limit(50);
+                const { fetchAllFromQuery } = await import('../lib/dbHelpers');
+                const { data: dupData, error: dupErr } = await fetchAllFromQuery(query, 1000);
                 if (!dupErr) {
                     let matches = dupData || [];
                     if (first && last && dob) {
@@ -536,13 +590,13 @@ export default function DashboardPage() {
                 }
             }
         }
-        const { error, data } = await supabase.from(tableName).insert([itemData]).select();
-        if (error) setError(`Error adding item: ${error.message}`);
-        else { 
-                const inserted = Array.isArray(data) ? data[0] : null;
-                logActivity('create', tableName, inserted?.id, { values: itemData });
-                fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`}); 
-        }
+    const { data, error } = await performInsert(tableName, itemData);
+    if (error) setError(`Error adding item: ${error.message || String(error)}`);
+    else {
+        const inserted = Array.isArray(data) ? data[0] : null;
+        logActivity('create', tableName, inserted?.id, { values: itemData });
+        fetchData(); handleCloseModal(); setSnackbar({open: true, message: `${activeView.slice(0, -1)} added successfully!`});
+    }
   };
 
     const ensureProfile = async (user: { id: string; email?: string | null }) => {
@@ -1614,8 +1668,8 @@ export default function DashboardPage() {
         const forceCreate = async () => {
             setShowDuplicateDialog(false);
             const tableName = 'clients';
-            const { error, data } = await supabase.from(tableName).insert([payload]).select();
-            if (error) setError(`Error adding item: ${error.message}`);
+            const { data, error } = await performInsert(tableName, payload);
+            if (error) setError(`Error adding item: ${error.message || String(error)}`);
             else {
                 const inserted = Array.isArray(data) ? data[0] : null;
                 logActivity('create', tableName, inserted?.id, { values: payload, duplicate_override: true });
@@ -1704,12 +1758,8 @@ export default function DashboardPage() {
         if (uploadError) {
             setDocError(`Upload failed: ${uploadError.message}`);
         } else {
-            const { error: dbError } = await supabase.from('client_documents').insert({
-                client_id: selectedClientForDocs.id,
-                file_name: file.name,
-                file_path: filePath,
-            });
-            if (dbError) setDocError(`Failed to save document record: ${dbError.message}`);
+            const { data: docData, error: dbError } = await performInsert('client_documents', { client_id: selectedClientForDocs.id, file_name: file.name, file_path: filePath });
+            if (dbError) setDocError(`Failed to save document record: ${dbError.message || String(dbError)}`);
             else { fetchDocuments(); logActivity('upload','client_documents', selectedClientForDocs.id, { file: file.name }); }
         }
         setUploading(false);
@@ -2245,13 +2295,9 @@ const ClientInsightView = ({ allClients, allBookings, allVisas, allPassports, al
 
     const handleAddNote = async () => {
         if (!newNote.trim() || !selectedClient) return;
-        const { error } = await supabase.from('client_notes').insert({
-            client_id: selectedClient.id,
-            note: newNote,
-            user: 'Admin' // Replace with actual user later
-        });
+        const { data: noteData, error } = await performInsert('client_notes', { client_id: selectedClient.id, note: newNote, created_at: new Date().toISOString() });
         if (error) {
-            onShowSnackbar({ open: true, message: `Error adding note: ${error.message}` });
+            onShowSnackbar({ open: true, message: `Error adding note: ${error.message || String(error)}` });
         } else {
             onShowSnackbar({ open: true, message: 'Note added successfully!' });
             setNewNote('');

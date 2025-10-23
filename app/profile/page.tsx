@@ -116,27 +116,15 @@ const ProfilePage: React.FC = () => {
       const { data: met } = await supabase.from('user_metrics_daily').select('*').eq('user_id', authUser.id).gte('date', since).order('date');
       if (met) setMetrics(met as any);
 
-      // Safer fetchEntity: start with broad select('*') to avoid column errors, then derive needed fields.
+      // Safer fetchEntity: page through results using fetchAllFrom to avoid hard 1000-row cap.
+      const { fetchAllFrom } = await import('../../lib/dbHelpers');
       const fetchEntity = async (table: string, _cols: string) => {
-        const attempts: any[] = [];
-        const log = (stage:string, res:any) => attempts.push({ table, stage, ok: !res.error, error: res.error ? { message: res.error.message } : null });
         try {
-          // Broad fetch first (limit for safety)
-            let res = await supabase.from(table).select('*').limit(1000);
-            log('star', res);
-            if (res.error) {
-              // final fallback returns
-              setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), ...attempts] }));
-              return res;
-            }
-            // If success and we don't need to refetch narrower (we can just map later)
-            if (attempts.some(a=>a.error)) {
-              setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), ...attempts] }));
-            }
-            return res;
+          const res = await fetchAllFrom(table, '*', 1000);
+          if (res.error) setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), { table, ok: false, error: { message: res.error.message } }] }));
+          return res;
         } catch (e:any) {
-          log('exception', { error: e });
-          setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), ...attempts] }));
+          setDebugInfo((d:any)=> ({ ...(d||{}), entityFetch: [...(d?.entityFetch||[]), { table, ok: false, error: { message: e.message || String(e) } }] }));
           return { data: [], error: e };
         }
       };
@@ -175,15 +163,17 @@ const ProfilePage: React.FC = () => {
     setActivityLoading(true);
     setActivityError(null);
     try {
-      const base = supabase.from('user_activity').select('*').eq('user_id', authUser.id).order('created_at',{ascending:false}).limit(200);
-      const { data, error } = await base;
+  const { fetchAllFromQuery } = await import('../../lib/dbHelpers');
+  const base = supabase.from('user_activity').select('*').eq('user_id', authUser.id).order('created_at',{ascending:false});
+  const { data, error } = await fetchAllFromQuery(base, 1000);
       if (error) {
         setActivityError(error.message);
       }
       let rows = data || [];
       if ((!rows || !rows.length) && !error) {
         // optional broad fetch for diagnostics
-        const broad = await supabase.from('user_activity').select('*').order('created_at',{ascending:false}).limit(200);
+        const broadQuery = supabase.from('user_activity').select('*').order('created_at',{ascending:false});
+        const broad = await fetchAllFromQuery(broadQuery, 1000);
         if (!broad.error && broad.data) {
           rows = (broad.data as any[]).filter(r=> r.user_id === authUser.id);
         }
