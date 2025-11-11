@@ -134,7 +134,9 @@ const TableView = React.memo(({
     dateTo,
     onDateFromChange,
     onDateToChange,
-    onClearDates
+    onClearDates,
+    profileDept,
+    profileRole
 }: { 
     data: any[], 
     view: string, 
@@ -153,7 +155,9 @@ const TableView = React.memo(({
     dateTo: dayjs.Dayjs | null,
     onDateFromChange: (d: dayjs.Dayjs | null) => void,
     onDateToChange: (d: dayjs.Dayjs | null) => void,
-    onClearDates: () => void
+    onClearDates: () => void,
+    profileDept?: string,
+    profileRole?: string
 }) => (
     <Fade in={true}>
     <Paper sx={{ p: 2, mt: 2, elevation: 3, borderRadius: 2 }}>
@@ -200,8 +204,20 @@ const TableView = React.memo(({
                                 {Object.keys(getFieldsForView(view)).map(key => {
                                     const val = (item as any)[key];
                                     let content: React.ReactNode = null;
+                                    const profileIsHoliday = (profileDept || '').toString().toLowerCase() === 'holidays';
+                                    const profileIsAdmin = (profileRole || '').toString().toLowerCase() === 'admin';
+                                    const bookingTypeLower = ((item as any).booking_type || '').toString().toLowerCase();
+                                    const isHolidayBooking = view === 'Bookings' && (bookingTypeLower.includes('holiday') || profileIsHoliday || profileIsAdmin);
 
-                                    if (key.includes('date') && val) {
+                                    // Restrict financial fields to Holidays bookings only OR Holidays users
+                                    if (['nett_amount','gross_amount','is_commissionable'].includes(key)) {
+                                        if (!isHolidayBooking) {
+                                            content = 'Restricted';
+                                        } else {
+                                            if (key === 'is_commissionable') content = (val ? 'Yes' : 'No');
+                                            else content = typeof val === 'number' ? formatCurrency(Number(val), 0) : (val ?? '—');
+                                        }
+                                    } else if (key.includes('date') && val) {
                                         content = dayjs(val).format(DISPLAY_DATE);
                                     } else if (key === 'client_id') {
                                         const c = clients.find(c => c.id === val);
@@ -276,6 +292,8 @@ export default function DashboardPage() {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const [openModal, setOpenModal] = useState(false)
+    const [profileDept, setProfileDept] = useState<string | null>(null);
+        const [profileRole, setProfileRole] = useState<string | null>(null);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add')
   const [selectedItem, setSelectedItem] = useState<Client | Booking | Visa | Passport | Policy | null>(null)
     // Search text used inside client select dropdown (modal forms)
@@ -370,6 +388,23 @@ export default function DashboardPage() {
       if (subscription) subscription.unsubscribe()
     }
     }, [])
+
+        // Load current user's profile department so UI can conditionally show financial fields
+        useEffect(() => {
+            if (!session?.user?.id) { setProfileDept(null); return; }
+            let mounted = true;
+                    (async () => {
+                        try {
+                            const { data, error } = await supabase.from('profiles').select('department, role').eq('id', session.user.id).maybeSingle();
+                            if (!mounted) return;
+                            if (!error && data) {
+                                setProfileDept(data.department ?? null);
+                                setProfileRole(data.role ?? null);
+                            }
+                        } catch (e) { /* ignore */ }
+                    })();
+            return () => { mounted = false; };
+        }, [session]);
 
     // Fetch per-user metrics & activity (30d window)
     useEffect(() => {
@@ -756,7 +791,7 @@ export default function DashboardPage() {
   const getFieldsForView = (view: string) => {
     switch (view) {
         case 'Clients': return { first_name: '', middle_name: '', last_name: '', email_id: '', mobile_no: '', dob: '', nationality: ''};
-    case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', amount: 0, status: 'Confirmed', segments: [] };
+    case 'Bookings': return { client_id: '', pnr: '', booking_type: '', destination: '', check_in: '', check_out: '', vendor: '', reference: '', confirmation_no: '', seat_preference: '', meal_preference: '', special_requirement: '', amount: 0, status: 'Confirmed', segments: [], booked_by: '', nett_amount: 0, gross_amount: 0, hotel_name: '', hotel_brand: '', is_commissionable: false, last_date_booked: '' };
     case 'Visas': return { client_id: '', country: '', visa_type: '', visa_number: '', issue_date: '', expiry_date: '', amount: 0, notes: '' };
     case 'Passports': return { client_id: '', passport_number: '', issue_date: '', expiry_date: '', amount: 0};
         case 'Policies': return { client_id: '', policy_number: '', insurer: '', sum_insured: 0, start_date: '', end_date: '', premium_amount: 0 };
@@ -949,6 +984,8 @@ export default function DashboardPage() {
                 onDateFromChange={setDateFrom}
                 onDateToChange={setDateTo}
                 onClearDates={()=>{ setDateFrom(null); setDateTo(null); }}
+                profileDept={profileDept ?? undefined}
+                profileRole={profileRole ?? undefined}
             />;
                         case 'Tasks':
                                                 return <UserRemindersView 
@@ -1676,6 +1713,22 @@ export default function DashboardPage() {
                                                     renderInput={(params)=><TextField {...params} label="Client" />}
                                                 />
                                             )}
+                                            {/* Financial fields: only editable/viewable when booking_type indicates Holidays */}
+                    {( ['nett_amount','gross_amount','is_commissionable'].includes(key) ) && (
+                        (() => {
+                            const bookingType = (formData.booking_type || '').toString().toLowerCase();
+                            const isHolidayUser = (profileDept || '').toString().toLowerCase() === 'holidays' || (profileRole || '').toString().toLowerCase() === 'admin';
+                            const isHoliday = bookingType.includes('holiday') || isHolidayUser;
+                            if (key === 'is_commissionable') {
+                                return (
+                                    <FormControlLabel control={<Checkbox size="small" checked={!!formData[key]} onChange={(e)=> updateFormDataSync((p:any)=> ({ ...p, [key]: e.target.checked }))} disabled={!isHoliday} />} label="Commissionable" />
+                                );
+                            }
+                            return (
+                                <TextField size="small" fullWidth label={label} value={formData[key] ?? ''} onChange={(e)=> updateFormDataSync((p:any)=> ({ ...p, [key]: e.target.value }))} type="number" disabled={!isHoliday} />
+                            );
+                        })()
+                    )}
                                             {/* Booking field removed from Policy form */}
                       {(key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && !key.endsWith('_id') && (
                         <DatePicker format={DISPLAY_DATE} label={label} value={formData[key] ? dayjs(formData[key]) : null} onChange={(d)=>handleDateChange(key,d)} slotProps={{ textField: { fullWidth:true, size:'small' } }} />
@@ -1691,7 +1744,7 @@ export default function DashboardPage() {
                           </Select>
                         </FormControl>
                       )}
-                      {!(key === 'client_id' || key === 'booking_id' || key === 'status' || key === 'segments' || key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date'].includes(key)) && (
+                                            {!(key === 'client_id' || key === 'booking_id' || key === 'status' || key === 'segments' || key.includes('date') || ['dob','check_in','check_out','start_date','end_date','departure_date','issue_date','expiry_date','nett_amount','gross_amount','is_commissionable'].includes(key)) && (
                         <TextField name={key} label={label} size="small" fullWidth value={formData[key] ?? ''} onChange={handleFormChange} multiline={isLong} rows={isLong ? 3 : 1} type={typeof (getFieldsForView(activeView === 'Client Insight' ? 'Clients' : activeView) as any)[key] === 'number' ? 'number' : 'text'} />
                       )}
                     </Grid>

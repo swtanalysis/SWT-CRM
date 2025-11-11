@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { Profile, UserDailyMetrics, UserActivity } from '../../lib/types';
-import { Box, Tabs, Tab, Avatar, Typography, Grid, Paper, TextField, Button, Stack, Alert, Snackbar, AppBar, Toolbar, Container, CssBaseline, CircularProgress, FormControlLabel, Switch, Table, TableHead, TableRow, TableCell, TableBody, ToggleButtonGroup, ToggleButton, Divider } from '@mui/material';
+import { Box, Tabs, Tab, Avatar, Typography, Grid, Paper, TextField, Button, Stack, Alert, Snackbar, AppBar, Toolbar, Container, CssBaseline, CircularProgress, FormControlLabel, Switch, Table, TableHead, TableRow, TableCell, TableBody, ToggleButtonGroup, ToggleButton, Divider, FormControl, InputLabel, Select, MenuItem } from '@mui/material';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -79,7 +79,9 @@ const ProfilePage: React.FC = () => {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         locale: (navigator.language || 'en-US'),
         currency: 'USD',
-        theme: 'light'
+        theme: 'light',
+        department: null,
+        role: null
       };
       const insertRes = await supabase.from('profiles').insert(seed).select().single();
       setDebugInfo((d:any)=> ({ ...(d||{}), insertRes: serializeResult(insertRes) }));
@@ -591,6 +593,44 @@ const ProfilePage: React.FC = () => {
                       {editableField('locale','Locale')}
                       {editableField('currency','Currency')}
                       {editableField('default_view','Default View')}
+                      <Grid container spacing={2}>
+                        <Grid item xs={12} md={6}>
+                          <FormControl size="small" fullWidth>
+                            <InputLabel id="dept-label">Department</InputLabel>
+                            <Select
+                              labelId="dept-label"
+                              label="Department"
+                              value={(form as any).department || ''}
+                              onChange={(e)=>setForm(f=>({...f, department: e.target.value}))}
+                              disabled={!edit}
+                            >
+                              <MenuItem value="">None</MenuItem>
+                              <MenuItem value="Holidays">Holidays</MenuItem>
+                              <MenuItem value="Ticketing">Ticketing</MenuItem>
+                              <MenuItem value="Visa/Passport">Visa/Passport</MenuItem>
+                              <MenuItem value="Admin">Admin</MenuItem>
+                              <MenuItem value="Other">Other</MenuItem>
+                            </Select>
+                          </FormControl>
+                        </Grid>
+                        <Grid item xs={12} md={6}>
+                          <FormControl size="small" fullWidth>
+                            <InputLabel id="role-label">Role</InputLabel>
+                            <Select
+                              labelId="role-label"
+                              label="Role"
+                              value={(form as any).role || ''}
+                              onChange={(e)=>setForm(f=>({...f, role: e.target.value}))}
+                              disabled={!edit}
+                            >
+                              <MenuItem value="">None</MenuItem>
+                              <MenuItem value="admin">Admin</MenuItem>
+                              <MenuItem value="agent">Agent</MenuItem>
+                              <MenuItem value="viewer">Viewer</MenuItem>
+                            </Select>
+                          </FormControl>
+                        </Grid>
+                      </Grid>
                     </Stack>
                     <Stack direction={{ xs:'column', md:'row' }} spacing={2} alignItems="center">
                       <FormControlLabel control={<Switch checked={(form.theme||'light')==='dark'} onChange={handleThemeToggle} disabled={!edit} />} label={(form.theme||'light')==='dark' ? 'Dark Mode' : 'Light Mode'} />

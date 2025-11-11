@@ -37,6 +37,14 @@ export type Booking = {
   meal_preference?: string
   special_requirement?: string
   amount?: number
+  // New fields: booking meta and financials
+  booked_by?: string
+  nett_amount?: number
+  gross_amount?: number
+  hotel_name?: string
+  hotel_brand?: string
+  is_commissionable?: boolean
+  last_date_booked?: string
   segments?: TripSegment[]
   status: string
   created_at?: string
@@ -168,6 +176,7 @@ export interface Profile {
   phone?: string
   avatar_url?: string
   role?: 'admin' | 'agent' | 'viewer'
+  department?: string
   timezone?: string
   locale?: string
   currency?: string
